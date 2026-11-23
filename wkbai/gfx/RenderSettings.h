@@ -133,6 +133,11 @@ struct RenderSettings {
 	// relief's shadow); the models' 0 off, 1 Low, 2 High (the steps before the setting: always on)
 	int pomTerrain = 0;
 	int pomModels = 2;
+	// the depth of the models' relief, times POM_RANGE (6 cm): 0 flat ... 4 (24 cm); 1 the
+	// physical depth, which at the game's zoom moves the surface by less than a pixel
+	float pomModelsDepth = 1.0f;
+	// the same for the ground, times TERRAIN_POM_RANGE (12 cm): 0 ... 4 (48 cm)
+	float pomTerrainDepth = 1.0f;
 	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
 	// 1/3 up, so slopes facing away from the sun stay lit
 	bool terrainOriginalLight = true;

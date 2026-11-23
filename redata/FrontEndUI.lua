@@ -3496,7 +3496,30 @@ Screens.options = {
 		end
 		FE_Help.context = nil
 		if #options > rows then
-			drawText(FONT_LIST, px + pw - L(260), py + ph - L(22), "Scroll for more settings", GREY, S)
+			-- a scrollbar along the panel's right edge: the thumb as long as the share of the
+			-- settings in view; dragged, or a click on the track jumps there
+			local maxScroll = #options - rows
+			local tx, ty, tw, th = px + pw - L(34), py + L(20), L(16), rows * rowH - L(8)
+			local kh = math.max(L(40), th * rows / #options)
+			local function scrollAt(my) return math.floor((my - ty - kh / 2) / (th - kh) * maxScroll + 0.5) end
+			if activeDrag == "options/scrollbar" then
+				if mouse.down then optionsState.scroll = scrollAt(mouse.y) else activeDrag = nil end
+			elseif hovered(tx - L(8), ty, tw + L(16), th) and mouse.pressed then
+				activeDrag = "options/scrollbar"
+				optionsState.scroll = scrollAt(mouse.y)
+			end
+			optionsState.scroll = math.max(0, math.min(optionsState.scroll, maxScroll))
+			local ky = ty + (th - kh) * optionsState.scroll / maxScroll
+			drawRect(tx, ty, tw, th, PANEL_BORDER)
+			drawRect(tx + L(2), ty + L(2), tw - L(4), th - L(4), DIM)
+			local hot = activeDrag == "options/scrollbar" or hovered(tx - L(8), ky, tw + L(16), kh)
+			drawRect(tx + L(2), ky + L(2), tw - L(4), kh - L(4), hot and YELLOW or GREY)
+		end
+		-- the graphics pages: Default puts the page's settings back (Cancel still undoes it)
+		if page and page.group == "Graphics" and not dialog
+			and button("Default", X(90), Y(1022), L(210), L(26)) then
+			resetOptionsPage(page.id)
+			optionsState.texts = {}
 		end
 		end
 		if dialog then

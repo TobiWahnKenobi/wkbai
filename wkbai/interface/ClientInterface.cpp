@@ -1807,6 +1807,9 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			static const char* const pomLevels[] = { "Off", "Low", "Medium", "High" };
 			ImGui::Combo("Parallax occlusion mapping (terrain)", &s.pomTerrain, pomLevels, 4);
 		}
+		ImGui::BeginDisabled(s.pomTerrain == 0);
+		ImGui::SliderFloat("Parallax depth (terrain)", &s.pomTerrainDepth, 0.0f, 4.0f, "%.2fx");
+		ImGui::EndDisabled();
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
 		{
@@ -1837,6 +1840,9 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			static const char* const pomLevels[] = { "Off", "Low", "High" };
 			ImGui::Combo("Parallax occlusion mapping (models)", &s.pomModels, pomLevels, 3);
 		}
+		ImGui::BeginDisabled(s.pomModels == 0);
+		ImGui::SliderFloat("Parallax depth (models)", &s.pomModelsDepth, 0.0f, 4.0f, "%.2fx");
+		ImGui::EndDisabled();
 		ImGui::Checkbox("Sky light on models", &s.skyLight);
 		ImGui::EndDisabled();
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");

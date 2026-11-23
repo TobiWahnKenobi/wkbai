@@ -272,7 +272,8 @@ cbuffer SunBuffer
 	// y: the snow lying on roofs and models, z: how wet they are, w: how dark the night is
 	// (wkbai's weather and day and night, 0 when off: the emissive maps' night lights)
 	float4 Material;
-	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light
+	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light,
+	                       // z: the models' relief depth, times POM_RANGE (RenderSettings::pomModelsDepth)
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without;
 	               // z the PBR debug view; w the parallax occlusion mapping (RenderSettings::pomModels: 0 off, 1 Low, 2 High)
@@ -607,11 +608,14 @@ static float2 SurfUV;
 static float2 SurfDx;
 static float2 SurfDy;
 static float PomShadow;
+// the relief's physical depth (metres of a height map's 0), and this frame's, scaled by the
+// setting (PrepareSurface)
 static const float POM_RANGE = 0.06;
+static float PomRange;
 
 float PomDepth(float2 uv)
 {
-	return (1 - heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r) * POM_RANGE;
+	return (1 - heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r) * PomRange;
 }
 
 // Parallax occlusion mapping with self-shadowing (with per-pixel lighting, for materials with a
@@ -626,7 +630,8 @@ void PrepareSurface(VS_OUTPUT input)
 	SurfDx = ddx(input.Texcoord);
 	SurfDy = ddy(input.Texcoord);
 	PomShadow = 1;
-	if (MeshLighting.z == 0 || Season.w == 0 || dot(input.Norm, input.Norm) == 0)
+	PomRange = POM_RANGE * FireLightCount.z;
+	if (MeshLighting.z == 0 || Season.w == 0 || PomRange <= 0 || dot(input.Norm, input.Norm) == 0)
 		return;
 	float2 hsize;
 	heightMap.GetDimensions(hsize.x, hsize.y);
@@ -635,7 +640,7 @@ void PrepareSurface(VS_OUTPUT input)
 	float3 n = normalize(input.Norm);
 	float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
 	float footprint = max(length(dp1), length(dp2));
-	if (POM_RANGE < footprint * 0.33)
+	if (PomRange < footprint * 0.33)
 		return;
 	float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
 	float det = dot(dp1, dp2perp);
@@ -650,7 +655,7 @@ void PrepareSurface(VS_OUTPUT input)
 	// (Low: half the steps of High, and half the sun ray's)
 	const bool pomHigh = Season.w > 1.5;
 	int steps = (int)lerp(pomHigh ? 24.0 : 12.0, pomHigh ? 8.0 : 4.0, en);
-	float stepDepth = POM_RANGE / steps;
+	float stepDepth = PomRange / steps;
 	float2 uv = SurfUV;
 	float d = 0;
 	float gap = PomDepth(uv);                                      // > 0: the ray is above the relief
@@ -678,7 +683,7 @@ void PrepareSurface(VS_OUTPUT input)
 		[loop] for (int j = 1; j <= sh; j++) {
 			float rise = d * j / sh;
 			float above = (d - rise) - PomDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
-			occl = max(occl, saturate(above / POM_RANGE * 6 * (1 - (float)j / (sh + 1))));
+			occl = max(occl, saturate(above / PomRange * 6 * (1 - (float)j / (sh + 1))));
 		}
 		PomShadow = 1 - occl;
 	}
@@ -2634,6 +2639,8 @@ void DiligentEnhancedSceneRenderer::render()
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
 	fire[0] = (float)numFires;
 	fire[1] = NightCastShare(false);   // the windows' cast light at night (MeanEmission)
+	fire[2] = std::clamp(g_renderSettings.pomModelsDepth, 0.0f, 4.0f);  // the models' relief depth
+	fire[3] = 0.0f;
 	for (int i = 0; i < numFires; i++) {
 		std::copy_n(&fireLights[i * 7], 4, fire + 4 + i * 8);
 		std::copy_n(&fireLights[i * 7 + 4], 3, fire + 8 + i * 8);

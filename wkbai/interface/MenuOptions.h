@@ -47,3 +47,5 @@ void SaveMenuOptions();
 void BeginEditMenuOptions();
 // Cancel: back to the settings as they were when the Options menu opened
 void RevertMenuOptions();
+// A page's settings back to their defaults (RenderSettings'); not saved yet
+void ResetMenuPage(const std::string& page);

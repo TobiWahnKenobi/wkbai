@@ -3969,14 +3969,16 @@ void DiligentEnhancedTerrainRenderer::render()
 	tessParams[3] = (float)terrain->edge;
 	{
 		// the ground's parallax occlusion mapping (RenderSettings::pomTerrain): the view ray's
-		// most and fewest steps, the sun ray's, the relief's depth (TERRAIN_POM_RANGE)
+		// most and fewest steps, the sun ray's, the relief's depth (TERRAIN_POM_RANGE times
+		// RenderSettings::pomTerrainDepth; 0: off)
 		static constexpr float POM_LEVELS[4][3] = { { 0, 0, 0 }, { 12, 6, 4 }, { 20, 8, 6 }, { 32, 12, 10 } };
-		const int level = std::clamp(g_renderSettings.pomTerrain, 0, 3);
+		const float depth = std::clamp(g_renderSettings.pomTerrainDepth, 0.0f, 4.0f);
+		const int level = depth > 0.0f ? std::clamp(g_renderSettings.pomTerrain, 0, 3) : 0;
 		float* pom = (float*)(sbdata + 960);
 		pom[0] = POM_LEVELS[level][0];
 		pom[1] = POM_LEVELS[level][1];
 		pom[2] = POM_LEVELS[level][2];
-		pom[3] = TERRAIN_POM_RANGE;
+		pom[3] = TERRAIN_POM_RANGE * depth;
 	}
 	float* tessGrid = (float*)(sbdata + 816);
 	tessGrid[0] = (float)terrain->width;
