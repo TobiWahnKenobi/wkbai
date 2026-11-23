@@ -613,9 +613,23 @@ static float PomShadow;
 static const float POM_RANGE = 0.06;
 static float PomRange;
 
+// The HD models' atlases leave the gaps between their UV islands black, with a height of 0 (the
+// deepest): a ray that left its island fell into the gap and drew a black groove along the
+// island's edge (the edges of walls, worse the deeper the relief). A height under POM_GUTTER
+// counts as the surface for the view ray (it stops at the island's edge) and as no relief for
+// the sun ray (PomShadowDepth: the gap casts no shadow).
+static const float POM_GUTTER = 0.02;
+
 float PomDepth(float2 uv)
 {
-	return (1 - heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r) * PomRange;
+	const float h = heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r;
+	return h < POM_GUTTER ? 0 : (1 - h) * PomRange;
+}
+
+float PomShadowDepth(float2 uv)
+{
+	const float h = heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r;
+	return h < POM_GUTTER ? PomRange : (1 - h) * PomRange;
 }
 
 // Parallax occlusion mapping with self-shadowing (with per-pixel lighting, for materials with a
@@ -682,7 +696,7 @@ void PrepareSurface(VS_OUTPUT input)
 		float occl = 0;
 		[loop] for (int j = 1; j <= sh; j++) {
 			float rise = d * j / sh;
-			float above = (d - rise) - PomDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
+			float above = (d - rise) - PomShadowDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
 			occl = max(occl, saturate(above / PomRange * 6 * (1 - (float)j / (sh + 1))));
 		}
 		PomShadow = 1 - occl;

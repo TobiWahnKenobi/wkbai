@@ -3513,7 +3513,8 @@ Screens.options = {
 			drawRect(tx, ty, tw, th, PANEL_BORDER)
 			drawRect(tx + L(2), ty + L(2), tw - L(4), th - L(4), DIM)
 			local hot = activeDrag == "options/scrollbar" or hovered(tx - L(8), ky, tw + L(16), kh)
-			drawRect(tx + L(2), ky + L(2), tw - L(4), kh - L(4), hot and YELLOW or GREY)
+			-- (a muted brown, lighter while held or under the mouse; colours are 0xAABBGGRR)
+			drawRect(tx + L(2), ky + L(2), tw - L(4), kh - L(4), hot and 0xFF5A7896 or 0xFF3C5470)
 		end
 		-- the graphics pages: Default puts the page's settings back (Cancel still undoes it)
 		if page and page.group == "Graphics" and not dialog

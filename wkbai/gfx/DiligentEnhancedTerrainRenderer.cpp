@@ -1997,11 +1997,18 @@ float2 AtlasUV(float2 texcoord)
 // derivatives, so the atlas cell's turn and flips come with them); the view ray steps down until
 // it meets the relief, refined between the last two steps; from there a ray towards the sun
 // finds whether relief above shades the point (TerrainPomShadow). The ray stays inside the
-// tile's own 64-texel cell of the atlas (clamped half a texel of the mip in): it never reads the
+// tile's own 64-texel cell of the atlas (wrapped inside it, half a texel of the mip in): it never reads the
 // neighbouring cells' pictures. Skipped where the relief is under a third of a pixel deep.
 float PomGroundDepth(float2 uv, float2 dx, float2 dy)
 {
 	return (1 - reliefTexture.SampleGrad(inpSampler, uv, dx, dy).r) * TerrainPom.w;
+}
+
+// A ray that leaves its cell wraps round inside it (the cells' pictures tile): clamped at the
+// cell's edge, it had smeared the edge's texels into stretched strips along every tile's border
+float2 CellWrap(float2 p, float2 cell0, float2 lo, float2 hi)
+{
+	return clamp(cell0 + frac((p - cell0) * 4) * 0.25, lo, hi);
 }
 
 float2 TerrainParallax(VS_OUTPUT input, float2 uv, float2 dx, float2 dy)
@@ -2022,20 +2029,29 @@ float2 TerrainParallax(VS_OUTPUT input, float2 uv, float2 dx, float2 dy)
 	uint aw, ah, levels;
 	reliefTexture.GetDimensions(0, aw, ah, levels);
 	const float ha = 0.5 / max(aw >> (int)ceil(max(lod, 0)), 1u);
-	const float2 lo = floor(saturate(uv) * 4 - 1e-4) * 0.25 + ha, hi = lo - 2 * ha + 0.25;
+	const float2 cell0 = floor(saturate(uv) * 4 - 1e-4) * 0.25;
+	const float2 lo = cell0 + ha, hi = lo - 2 * ha + 0.25;
 	float3 e = normalize(input.FragPos - FogCamera.xyz);
 	float en = max(-dot(e, n), 0.15);
 	float3 lat = (e + n * en) / en;
 	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
 	const int steps = max((int)lerp(TerrainPom.x, TerrainPom.y, en), 1);
 	const float stepDepth = range / steps;
+	// the heights the ray reads blurred to its step (a step's UV travel against a pixel's): at a
+	// grazing view a step jumps several texels, and sharp heights then came out as square
+	// terraces; read at the mip of the step, the relief stays smooth
+	const float stepUv = length(uvPerDepth) * stepDepth;
+	const float blur = max(1, stepUv / max(max(length(dx), length(dy)), 1e-8));
+	const float2 mdx = dx * blur, mdy = dy * blur;
+	// (the ray's UV unwrapped, so the refinement between two steps never spans a wrap; wrapped
+	// for each read and at the end)
 	float2 start = uv;
 	float d = 0;
-	float gap = PomGroundDepth(uv, dx, dy);
+	float gap = PomGroundDepth(uv, mdx, mdy);
 	[loop] for (int i = 1; i <= steps && gap > 0; i++) {
 		float nd = stepDepth * i;
-		float2 nuv = clamp(start + uvPerDepth * nd, lo, hi);
-		float ngap = PomGroundDepth(nuv, dx, dy) - nd;
+		float2 nuv = start + uvPerDepth * nd;
+		float ngap = PomGroundDepth(CellWrap(nuv, cell0, lo, hi), mdx, mdy) - nd;
 		if (ngap <= 0) {
 			float t = gap / (gap - ngap);
 			uv = lerp(uv, nuv, t);
@@ -2045,6 +2061,7 @@ float2 TerrainParallax(VS_OUTPUT input, float2 uv, float2 dx, float2 dy)
 		}
 		uv = nuv; d = nd; gap = ngap;
 	}
+	uv = CellWrap(uv, cell0, lo, hi);
 	float3 l = normalize(SunDirection);
 	float ln = dot(l, n);
 	const int sh = (int)TerrainPom.z;
@@ -2054,7 +2071,7 @@ float2 TerrainParallax(VS_OUTPUT input, float2 uv, float2 dx, float2 dy)
 		float occl = 0;
 		[loop] for (int j = 1; j <= sh; j++) {
 			float rise = d * j / sh;
-			float above = (d - rise) - PomGroundDepth(clamp(uv + uvPerRise * rise, lo, hi), dx, dy);
+			float above = (d - rise) - PomGroundDepth(CellWrap(uv + uvPerRise * rise, cell0, lo, hi), mdx, mdy);
 			occl = max(occl, saturate(above / range * 6 * (1 - (float)j / (sh + 1))));
 		}
 		TerrainPomShadow = 1 - occl;
