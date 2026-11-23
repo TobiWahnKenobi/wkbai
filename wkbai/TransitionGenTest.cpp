@@ -11,7 +11,9 @@
 #include "file.h"
 #include "gfx/bitmap.h"
 #include "gfx/Bc7Encode.h"
+#include <algorithm>
 #include <cmath>
+#include <set>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -65,23 +67,33 @@ void Test_GeneratedTransitions()
 	fs::remove_all(dir, ec);
 	TerrainTextureDatabase db;
 	db.load("Maps\\Map_Textures\\All_Textures.dat");
-	int generated = 0, cornersOk = 0;
+	int generated = 0, cornersOk = 0, triples = 0;
 	std::string names;
 	for (const auto& [name, g] : db.groups) {
 		if (!g || g->textures.empty() || g->textures.begin()->second->genCorners[0].empty())
 			continue;
 		generated++;
 		names += name + " ";
-		bool ok = g->textures.size() == 8;
+		// a pair: 8 pictures of its two groups; a triple ("A-B-C"): 12 of all three, each of its
+		// three on two corners side by side and across
+		const size_t n = std::count(name.begin(), name.end(), '-') + 1;
+		bool ok = g->textures.size() == (n == 2 ? 8u : 12u);
+		std::set<std::string> layouts;
 		for (const auto& [id, t] : g->textures) {
-			// every corner named, and two groups among them
-			bool two = false;
-			for (int k = 1; k < 4; k++) two = two || t->genCorners[k] != t->genCorners[0];
-			ok = ok && !t->genCorners[3].empty() && two;
+			const auto& c = t->genCorners;
+			const std::set<std::string> distinct(c.begin(), c.end());
+			ok = ok && !c[3].empty() && distinct.size() == n;
+			if (n == 3)
+				for (int k = 0; k < 4; k++)
+					for (int m = k + 1; m < 4; m++)
+						if (c[k] == c[m])
+							layouts.insert(c[k] + (m - k == 2 ? " across" : " side"));
 		}
+		ok = ok && (n == 2 || layouts.size() == 6);
+		triples += n == 3;
 		cornersOk += ok;
 	}
-	check("groups", generated >= 9 && cornersOk == generated, std::to_string(generated) + " generated: " + names);
+	check("groups", generated >= 9 && triples >= 1 && cornersOk == generated, std::to_string(generated) + " generated (" + std::to_string(triples) + " triples): " + names);
 	// the files: BC7 with mips, heights 256 x 256
 	{
 		const fs::path dds = dir / "GRASS1-ROCK1.dds", bump = dir / "GRASS1-ROCK1_BumpMap.png";

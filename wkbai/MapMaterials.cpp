@@ -201,6 +201,7 @@ namespace {
 		std::map<const TerrainTexture*, std::array<int, 4>> corners; // per picture corner, a base group (-1 unknown)
 		std::unordered_set<uint64_t> compat;        // (rid A, side of A, rid B, B's orientation in A's frame)
 		std::map<std::pair<int, int>, std::array<std::vector<Placed>, 16>> fits; // pair (a < b), world corners that are b -> tiles
+		std::map<std::array<int, 4>, std::vector<Placed>> fits3; // three groups on the world corners -> tiles (generated, TransitionGen.h)
 		std::vector<std::vector<Placed>> pure;      // per base group: its textures in every orientation
 		std::vector<std::vector<int>> next;         // next[a][b]: the next group on the shortest way of transitions from a to b (-1 none)
 		std::vector<std::vector<int>> dist;         // dist[a][b]: transitions on that way (99 none)
@@ -424,8 +425,15 @@ namespace {
 				bool two = true;
 				for (int k = 0; k < 4; k++)
 					two = two && (cc[k] == lo || cc[k] == hi);
-				if (!two)
+				if (!two) {
+					// three groups (a generated picture): keyed by the corners as placed, each orientation
+					for (int k = 0; k < 8; k++) {
+						std::array<int, 4> w;
+						for (int i = 0; i < 4; i++) w[i] = cc[o.perm[k][i]];
+						L.fits3[w].push_back({ t.get(), (uint8_t)k });
+					}
 					continue;
+				}
 				auto& table = L.fits[{ lo, hi }];
 				for (int k = 0; k < 8; k++) {
 					int bits = 0;
@@ -1184,7 +1192,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	auto patternOk = [&](const std::array<int, 4>& c) {
 		const int a = *std::min_element(c.begin(), c.end()), b = *std::max_element(c.begin(), c.end());
 		if (a == b) return !L.pure[a].empty();
-		for (int k = 0; k < 4; k++) if (c[k] != a && c[k] != b) return false;
+		for (int k = 0; k < 4; k++) if (c[k] != a && c[k] != b) return L.fits3.count(c) != 0;
 		auto it = L.fits.find({ a, b });
 		if (it == L.fits.end()) return false;
 		int bits = 0;
@@ -1646,6 +1654,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 			for (int k = 0; k < 4; k++) c[k] = vg[vi[k]];
 			const int a = *std::min_element(c.begin(), c.end()), b = *std::max_element(c.begin(), c.end());
 			if (a == b && !L.pure[a].empty()) { cand[ti] = &L.pure[a]; continue; }
+			if (auto f3 = L.fits3.find(c); f3 != L.fits3.end()) { cand[ti] = &f3->second; continue; }
 			if (patternOk(c)) {
 				int bits = 0;
 				for (int k = 0; k < 4; k++) if (c[k] == b) bits |= 1 << k;

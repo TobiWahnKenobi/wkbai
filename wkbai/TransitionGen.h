@@ -6,7 +6,10 @@
 // The pairs come from the materials data file of a texture database ("generatedTransitions" in
 // Maps\Materials\All_Textures.json: { "version": n, "pairs": [ [ "GRASS1", "ROCK1" ], ... ] }).
 // Each pair becomes a texture group "<A>-<B>" of 8 pictures (one, two side by side, two across
-// and three corners of B, two variants each) in Generated\<A>-<B>.dds (BC7 with every mip level,
+// and three corners of B, two variants each); each triple ("triples": [ [ "GRASS1", "MIDHILL1",
+// "ROCK1" ], ... ], three groups on one tile, where the solver can't keep a tile to two) a group
+// "<A>-<B>-<C>" of 12 (one group on two corners side by side or across, each of the three, two
+// variants), its sides exactly the pairs' (no seam to the neighbours). In Generated\<name>.dds (BC7 with every mip level,
 // gfx/Bc7Encode.h; the size of the largest source: an HD pack's 1024 pixels an atlas) and
 // <A>-<B>_BumpMap.png (8-bit heights, 256 pixels, as the game's bump maps), in the user folder's
 // saved\Maps\Map_Textures (the file system finds them there after the archives).
