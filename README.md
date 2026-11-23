@@ -48,7 +48,7 @@ The camera is not tied to the RTS view: it can come down to the ground, where th
 
 wkbai draws with [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore) on **Direct3D 12 or Vulkan**. The *Original* settings look like the original game (its lighting, shadows, sky, fog and water, found by reverse engineering); everything below is optional, with its own setting.
 
-- **HD models:** glTF replacements of the original models, loaded as overrides from a mod or the user folder, with team colours, emblems, smoke and blood-drip points, animation, parallax occlusion mapping and damage states (Damaged, Derelict, Ruined). A set of hand-built HD buildings is in the works (in its own repository); the screenshots show only the ones already accepted.
+- **HD models:** glTF replacements of the original models, loaded as overrides from a mod or the user folder, with team colours, emblems, smoke and blood-drip points, animation, parallax occlusion mapping and damage states (Damaged, Derelict, Ruined). A set of hand-built HD buildings is in the works (in its own repository). Accepted so far: the Arcanum, Armoury, Bank, Barracks, Black Mass, Blacksmith, Castle, Celestial Castle, Keep, Manor and Palace; the screenshots show only these.
 - **Lighting:** per-pixel PBR lighting of the models with GGX highlights, reflections (screen-space, and ray-traced at Ultra), sky light and **dynamic global illumination**: light bounced from the ground and the buildings, and at Ultra the light of lit windows, fires and lamps from the models' emissive maps.
 - **Shadows:** sun shadow maps for every unit and building, **ray-traced shadows** (buildings, trees with their leaves, animated units), contact shadows and cloud shadows.
 - **Sky:** a physical sky with sunrises and sunsets, **volumetric clouds** (cumulus, cumulonimbus with anvils, cirrus, lenticulars, stratus decks; each weather its own), light shafts and multiple scattering.
@@ -59,6 +59,7 @@ wkbai draws with [Diligent Engine](https://github.com/DiligentGraphics/DiligentC
 - **Trees and grass:** the forest is drawn and culled on the GPU (30,000 trees: 50 ms of CPU per frame, were 150-200 ms), trees and grass bend in the wind in gusts, and their shadows sway with them. PBR grass blends across tile edges.
 - **Extend map:** the land goes on past the edge of the playable map (seas, ranges, rivers, forests and weather), out to about 30 km, cached on disk.
 - **Terrain:** tessellation, PBR material maps for the ground (normal, ORM and height maps from texture packs) with **parallax occlusion mapping** and self-shadowed relief, ground Fresnel from the live sky.
+- **Generated ground transitions:** where a map puts two or three grounds side by side that the game's textures have no transition tile for, wkbai makes one on the player's machine from the game's own pictures (cached as BC7), and low river banks where rivers cross flat land. On the 18 Britain maps, unmatched tiles went from 18,479 to 113.
 - **Parallax occlusion mapping on models**, with depth sliders for the models and the ground; stained-glass refraction.
 - **Post-processing:** ambient occlusion, bloom, FXAA, TAA, **FSR 3.1** anti-aliasing and upscaling (or FSR 1), tilt-shift, motion blur, colour grading.
 - **Formats:** glTF 2.0 (import as overrides, export of the originals), DDS and KTX2 textures with BC7.
@@ -111,7 +112,7 @@ All of these are game settings in the lobby, off by default; with them off, game
 
 ### In the works (on branches, not in `modernization` yet)
 
-Generated ground transitions, lockstep multiplayer, and more HD models.
+Lockstep multiplayer, and more HD models.
 
 ## Status
 
