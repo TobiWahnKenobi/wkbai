@@ -41,6 +41,8 @@ The ground's pictures (`Maps\Map_Textures\<name>`, each an atlas of 4 x 4 cells)
 
 The maps cover the whole atlas in the picture's own layout, cell for cell. Blur and make mipmaps within each cell, never across a cell's edge, since the cells are unrelated pictures. They are read as linear data, not sRGB, and the normal map should match the height map's slopes.
 
+The ground's [generated transitions](../ui/editor/map-format.md#generated-transitions) are blended from the pictures that are loaded, a mod's or the HD pack's included, and made again when one of them changes.
+
 ## Levels that name what the game set lacks
 
 A level made for another game set, or for a mod that isn't on, can give its objects orders or tasks that the game set you play with doesn't have. wkbai still loads it:
