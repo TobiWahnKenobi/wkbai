@@ -339,7 +339,7 @@ void GITimerBegin(DiligentGfx* gfx)
 	const int q = g_giSlot;
 	if (g_giIssued[q]) {
 		QueryDataTimestamp a, b;
-		if (g_giStart[q]->GetData(&a, sizeof(a), false) && g_giEnd[q]->GetData(&b, sizeof(b), false) && a.Frequency)
+		if (QueryReadable(g_giStart[q]) && QueryReadable(g_giEnd[q]) && g_giStart[q]->GetData(&a, sizeof(a), false) && g_giEnd[q]->GetData(&b, sizeof(b), false) && a.Frequency)
 			g_giLastMs = (double)(b.Counter - a.Counter) * 1000.0 / (double)a.Frequency;
 	}
 	g_giGpuMs = g_giLastMs;
