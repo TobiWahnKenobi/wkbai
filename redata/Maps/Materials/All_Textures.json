@@ -4,7 +4,7 @@
  "database": "Maps\\Map_Textures\\All_Textures.dat",
  "about": "The materials of the base game's texture database for map folders' ground rules (map.json \"ground\"; the RE repo's docs/engine/map-authoring.md, step 17.5). A mod or a texture set may ship its own Maps\\Materials\\<database name>.json, which replaces this one; a map adds or changes materials in map.json ground.materials. groups: per texture group its terrain, the terrain's speed (cost: below 1 slows), whether land units may cross it and its mean colour, from the game set's terrains; bridge: false: never a step between two other groups (snow between a cliff and grass).",
  "generatedTransitions": {
-  "about": "Pairs of base groups the texture set has no transition for, made on the player's machine from the game's own pictures (wkbai TransitionGen.h): grass to rock, sand to hillside... so the ground solver needs no strip of a third ground between them. The most frequent causes of unmatched tiles on the Great Britain maps (2026-11-22). triples: three groups that meet on one tile (12 pictures each: a group on two corners side by side or across), the most frequent left on those maps after the pairs (2026-11-23). version: raise it to make the pictures again.",
+  "about": "Pairs of base groups the texture set has no transition for, made on the player's machine from the game's own pictures (wkbai TransitionGen.h): grass to rock, sand to hillside... so the ground solver needs no strip of a third ground between them. The most frequent causes of unmatched tiles on the Great Britain maps (2026-11-22). triples: three groups that meet on one tile (12 pictures each: a group on two corners side by side or across), the most frequent left on those maps after the pairs (2026-11-23). A pair the game has a transition for gets only the corner patterns the game lacks (group <A>-<B>_GEN; 2026-11-23). version: raise it to make the pictures again.",
   "version": 1,
   "pairs": [
    [
@@ -42,6 +42,34 @@
    [
     "GRASS5",
     "ROCK1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS5"
+   ],
+   [
+    "ROCKYGRASS1",
+    "SAND1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS1"
+   ],
+   [
+    "GRASS1",
+    "MIDHILL1"
+   ],
+   [
+    "GRASS5",
+    "MIDHILL1"
+   ],
+   [
+    "FOREST3",
+    "GRASS1"
+   ],
+   [
+    "GRASS5",
+    "ROCKYGRASS1"
    ]
   ],
   "triples": [
@@ -189,6 +217,56 @@
     "GRASS1",
     "ROCK1",
     "SHALLOW_RIVER"
+   ],
+   [
+    "D_EARTH1",
+    "ROCK1",
+    "SAND1"
+   ],
+   [
+    "MIDHILL1",
+    "ROCK1",
+    "SNOW1"
+   ],
+   [
+    "GRASS3",
+    "GRASS5",
+    "SAND1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS5",
+    "ROCK1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS1",
+    "SAND1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS1",
+    "ROCKYGRASS1"
+   ],
+   [
+    "GRASS1",
+    "GRASS5",
+    "ROCKYGRASS1"
+   ],
+   [
+    "GRASS1",
+    "GRASS3",
+    "SAND1"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS1",
+    "GRASS5"
+   ],
+   [
+    "D_EARTH1",
+    "GRASS1",
+    "ROCK1"
    ]
   ]
  },

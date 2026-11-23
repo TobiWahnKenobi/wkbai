@@ -304,8 +304,12 @@ namespace {
 			groups.push_back(it->second.get());
 			name += (name.empty() ? "" : "-") + g;
 		}
-		if (db.groups.count(name) || (names.size() == 2 && db.groups.count(names[1] + "-" + names[0])))
-			return false; // the game has this transition
+		// a pair the game has: its patterns the game lacks (the solver takes a generated picture only
+		// for a corner pattern no game picture has: a diagonal of GRASS1-MIDHILL1...)
+		if (names.size() == 2 && (db.groups.count(name) || db.groups.count(names[1] + "-" + names[0])))
+			name += "_GEN";
+		if (db.groups.count(name))
+			return false;
 		if (!Generate(name, groups, pairsVersion, dir)) {
 			printf("Generated transition %s: a source picture is missing, left out\n", name.c_str());
 			return false;

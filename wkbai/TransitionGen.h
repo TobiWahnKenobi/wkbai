@@ -27,7 +27,9 @@ struct TerrainTextureDatabase;
 namespace TransitionGen {
 	constexpr int VERSION = 2; // 2: a soft ramp, the noise close to the border, a grain on the edge
 	// adds the generated groups to db (dbFile: its game path, "Maps\Map_Textures\All_Textures.dat"),
-	// making their pictures first where the cache lacks them; a pair whose groups db doesn't have,
-	// or that has a transition already, is left out. Returns the number of groups added.
+	// making their pictures first where the cache lacks them; a pair or triple whose groups db
+	// doesn't have is left out. A pair the game has a transition for becomes "<A>-<B>_GEN": the
+	// solver takes its pictures only for a corner pattern none of the game's has (a diagonal...).
+	// Returns the number of groups added.
 	int Add(TerrainTextureDatabase& db, const std::string& dbFile);
 }

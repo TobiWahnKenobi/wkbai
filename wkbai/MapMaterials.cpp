@@ -459,8 +459,13 @@ namespace {
 		}
 		// the solver's tables
 		L.pure.resize(L.groups.size());
+		// the game's pictures first, then the generated ones: a generated picture of a pair the game
+		// has (TransitionGen.h, "<A>-<B>_GEN") is taken only for a corner pattern no game picture has
+		for (int generated = 0; generated < 2; generated++)
 		for (const auto& [name, g] : db.groups)
 			for (const auto& [id, t] : g->textures) {
+				if (t->genCorners[0].empty() == (generated == 1))
+					continue;
 				std::array<int, 4> gen;
 				const std::array<int, 4>* found = nullptr;
 				if (!t->genCorners[0].empty()) {
@@ -508,7 +513,10 @@ namespace {
 					for (int i = 0; i < 4; i++)
 						if (cc[o.perm[k][i]] == hi)
 							bits |= 1 << i;
-					table[bits].push_back({ t.get(), (uint8_t)k });
+					auto& list = table[bits];
+					if (generated && std::any_of(list.begin(), list.end(), [](const Placed& p) { return p.tex->genCorners[0].empty(); }))
+						continue; // the game has this pattern
+					list.push_back({ t.get(), (uint8_t)k });
 				}
 			}
 		L.ways({});
