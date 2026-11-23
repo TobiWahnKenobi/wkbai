@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/far-land#stored-far-land, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/generated-transitions#generated-transitions, mechanic/far-land#stored-far-land, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -53,13 +53,22 @@ Instead of painting every hill by hand, a map maker (or an AI assistant) can des
 
 `wkbai --author terrain "<folder>"` turns the plan into `heights.png`: the shapes, then the roughness and the wearing, then the passes, ramps and river beds carved last, so that they stay passable. The same plan and seed always give the same land. Where the sea is, the folder's water gets a lake. It answers with numbers about the land: its heights, how steep it is, how much of it units can walk on (most units can stand on slopes up to 45 degrees), and for each shape whether it came out as asked: a plateau flat enough to build on, a pass or ramp not too steep, a river that never runs uphill. `wkbai --author terrain-stats "<folder>"` gives the same numbers for the land as it is now.
 
-**Rivers with water:** a river in the plan with `"water": true` gets its water too: one sloped surface that runs down its course, with rapids, cascades and falls where the land drops ([waterfalls](../../options/graphics/water.md#waterfalls)). `grade` smooths its bed into an even fall over that many metres; `"trough": false` leaves out the broad valley it carves first, for rivers in real land that has its own valleys. The water never stands above its banks, and lakes on the land keep their rims.
+**Rivers with water:** a river in the plan with `"water": true` gets its water too: one sloped surface that runs down its course, with rapids, cascades and falls where the land drops ([waterfalls](../../options/graphics/water.md#waterfalls)). `grade` smooths its bed into an even fall over that many metres; `"trough": false` leaves out the broad valley it carves first, for rivers in real land that has its own valleys. The water never stands above its banks, and lakes on the land keep their rims. Where the land beside it is flat and lower than the water, it gets a low natural bank (at most half a metre over the water), so the water ends along the river's own curve instead of in steps of the tile grid.
 
 **Your hand edits stay.** The plan only ever writes `heights.png`. What you changed with the [height brushes](terrain.md) is in `heights.hand.png`, which is never touched, and is added on top as before.
 
 ## The ground from rules
 
 The ground's textures can come from rules too, in `map.json`'s `ground`: a preset (temperate, nordic or dry), the material where no rule holds, and a list of rules, the first that holds wins. A rule names a material (such as grass, rock, sand or snow) and when it applies: by height, height above the sea, slope, how the land curves, how wet it is, near a river or the sea, a painted mask, and so on. `wkbai --author materials "<folder>"` paints the tiles from them: it picks a material for each point, then a picture for each tile whose sides match its neighbours' by the texture database's own edge rules, so that one ground passes into the next without seams. Tiles you painted by hand stay. It answers with how much of each material there is and where tiles didn't fit, with `--png` also as a map from above. `wkbai --author material-presets` lists the materials and the presets.
+
+## Generated transitions
+
+The game's textures have no transition for many pairs of grounds, such as grass to rock or sand to hillside, and none for three grounds meeting in one tile. Where the ground rules need one, wkbai makes it:
+
+- **Made on your machine:** blended from the game's own pictures (the HD pack's when it is on) the first time the game loads its ground textures, and kept in `saved\Maps\Map_Textures\Generated` in your user folder. They are made again only when a picture they come from changes, for example when you switch the HD pack on or off. They are never shipped, and the game's own transitions are always used first; a generated one only fills a pattern the game lacks.
+- **Edges the rules leave out:** two pictures the texture database's edge rules don't allow side by side are still taken when their pixels meet well enough that no seam shows.
+
+With both, the tiles where no picture fits are rare: on large maps of real, hilly land a few dozen, where they had been thousands. The build's report still names them.
 
 ## Woods and resources from rules
 
@@ -88,7 +97,7 @@ Before a map folder can be played, wkbai builds it into `build\` inside the fold
 
 Two commands help a map maker see what can go on a map and what is on one. They run without opening the game's window and write their answer as JSON:
 
-- `wkbai --author catalog`: everything that can go on a map, read from the game set and the texture databases that are loaded (so a mod's units and textures are in it): every unit, building and object by kind, with its footprint and what it holds; every group of ground textures with its kind of terrain, how units pass over it and which textures may border it; the skies, the trees and the limits of a map's size. `--mod <name>` reads one mod, `--mod none` the game alone.
+- `wkbai --author catalog`: everything that can go on a map, read from the game set and the texture databases that are loaded (so a mod's units and textures are in it): every unit, building and object by kind, with its footprint and what it holds; every group of ground textures with its kind of terrain, how units pass over it and which textures may border it; the skies, the trees and the limits of a map's size. The [generated transitions](#generated-transitions) are counted (`generatedGroups`), not listed with the game's groups. `--mod <name>` reads one mod, `--mod none` the game alone.
 - `wkbai --author describe "<map>"`: a map, either a folder or an original level, in numbers: its size, its heights and slopes, its water, how much of each ground it has, and its objects by kind and player. `--png <file>` also draws it from above.
 - `wkbai --author <folder>` builds a map folder; its report, with any warnings and the tiles they are about, is `report.json` in its `build` folder.
 

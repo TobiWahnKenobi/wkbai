@@ -1,6 +1,6 @@
 ---
 title: Options
-ids: [options, ui/frontend/options, ui/frontend/options/tabs#the-tabs, ui/frontend/options/pages#the-tabs, ui/frontend/options/settings#the-kinds-of-setting, ui/frontend/options/ok#ok-and-cancel, ui/frontend/options/cancel#ok-and-cancel, ui/frontend/options/scroll#the-kinds-of-setting, FRONT_END_OPTIONS_TITLE]
+ids: [options, ui/frontend/options, ui/frontend/options/tabs#the-tabs, ui/frontend/options/pages#the-tabs, ui/frontend/options/settings#the-kinds-of-setting, ui/frontend/options/ok#ok-and-cancel, ui/frontend/options/cancel#ok-and-cancel, ui/frontend/options/scroll#the-kinds-of-setting, ui/frontend/options/default#default, FRONT_END_OPTIONS_TITLE]
 order: 30
 ---
 
@@ -41,12 +41,16 @@ Each group remembers the page you had open in it. Some settings have no place in
 - **Text:** a field to type in; a grey hint shows while it is empty, and the default applies then.
 - **Greyed out:** a setting that has no effect with the others as they are (its entry says what it needs).
 - **(after a restart):** the setting is saved with OK, but takes effect the next time wkbai starts.
-- **More than fits:** "Scroll for more settings" at the bottom right; the mouse wheel scrolls the page.
+- **More than fits:** a scrollbar along the page's right edge: drag it, click the track to jump there, or use the mouse wheel.
 
 ## OK and Cancel
 
 - **OK** saves every change to the settings file `wkconfig.json` and applies those that need it, such as the sound volumes, the Extend map and the online settings.
 - **Cancel** (or Esc) puts every setting back as it was when you opened the Options, keys included.
+
+## Default
+
+On every Graphics page, the **Default** button at the bottom left puts that page's settings back to wkbai's defaults. The other pages are left as they are. OK keeps the change; Cancel undoes it with the rest.
 
 ## Where to start with graphics
 
