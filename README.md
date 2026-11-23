@@ -15,96 +15,107 @@
 > The work happens on the `modernization` branch. No code or assets of the original game are included:
 > you need your own copy of the game.
 
-![A town in a campaign save, rendered by wkbai](docs/screenshot-town.jpg)
+![A walled town from the usual RTS camera](docs/screenshots/town-rts.jpg)
 
-*The stress-test scene: a campaign save with about 4,850 objects in view, drawn with Direct3D 12. Grass, fire lights, real unit shadows, terrain tessellation, FXAA and 16x anisotropic filtering are on.*
+*A walled town from the usual RTS camera, with the original's interface: volumetric clouds, PBR grass, real shadows, and the HD Armoury, Blacksmith, Bank and Black Mass among the original buildings.*
 
-![The same save from above without fog, with the High water](docs/screenshot-map.jpg)
+## Gallery
 
-*The same save from above, without fog: the High water, with tessellated waves and whitecaps.*
+The camera is not tied to the RTS view: it can come down to the ground, where the new renderer shows what it does close up. Only the HD models already accepted are shown; the other buildings are the originals.
 
-## What wkbai changes
+| | |
+|---|---|
+| ![HD Blacksmith at sunset](docs/screenshots/hd-blacksmith.jpg) | ![HD Black Mass at sunset](docs/screenshots/hd-blackmass.jpg) |
+| *The HD Blacksmith at sunset: rebuilt on the original's measured shape, PBR materials with weathering, parallax relief, forge smoke.* | *The HD Black Mass at dusk, its fire lighting the arch.* |
+| ![HD Armoury](docs/screenshots/hd-armoury.jpg) | ![Over the roofs of the town](docs/screenshots/town-low.jpg) |
+| *The HD Armoury in the afternoon light.* | *Over the roofs: chimney smoke, flags in the wind, the walls.* |
+| ![The town at night](docs/screenshots/night-town.jpg) | ![Night under a full moon](docs/screenshots/night-moon.jpg) |
+| *Night: lit windows, lamps and fires light the town (dynamic GI).* | *A full moon: its phase sets how bright the night is.* |
+| ![A burning building at night](docs/screenshots/fire-night.jpg) | ![A thunderstorm on the coast](docs/screenshots/storm.jpg) |
+| *Procedural fire, with fire light on everything around it.* | *A thunderstorm over the Cornish coast: rain over the whole view.* |
+| ![A town in deep winter](docs/screenshots/winter.jpg) | ![The HD Manor in the snow](docs/screenshots/winter-manor.jpg) |
+| *Deep winter: snow cover on the ground, the trees and the roofs.* | *The HD Manor in falling snow.* |
+| ![Sunset](docs/screenshots/sunset-sea.jpg) | ![Broken ice](docs/screenshots/ice.jpg) |
+| *Sunset under the physical sky.* | *Artillery breaks the ice; units fall in, and the holes refreeze.* |
+| ![The land beyond the map's edge](docs/screenshots/extend-map.jpg) | ![Cornwall's coast](docs/screenshots/britain-coast.jpg) |
+| *Extend map: the land goes on past the map's edge, out to the horizon.* | *Cornwall, one of 18 Great Britain maps made from OS Terrain 50.* |
+| ![An island in the sea](docs/screenshots/britain-island.jpg) | |
+| *The ocean water around Cornwall's islands.* | |
 
-Compared with upstream wkbre2:
+## What wkbai adds
 
-- **Renderer**
-  - [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore) with **Direct3D 12 and Vulkan**. The old Direct3D 9/11 and OpenGL renderers are gone, and a null renderer remains for tests.
-- **Faithful look, from reverse engineering the original**
-  - **Lighting:** the original's model and terrain lighting.
-  - **Shadows:** the original's static building shadows, scrolling cloud shadows and unit blob shadows.
-  - **Sky and fog:** the sky cube with its horizon fade, the fog distances, and an edge fog that hides the map border.
-  - **Water:** a water surface with scrolling texture layers, ripples and a sun glint.
-  - **Models:** `SHEAR_MODEL` models adapt to sloped ground.
-- **Gameplay and interface**
-  - **Minimap:** player dots, the camera arrow and the four mode buttons.
-  - **Camera:** limits on pitch and height, and Shift to scroll faster.
-  - **Order flags:** a flag marks the target of an order.
-  - **Deleting:** the Delete key destroys the selected object, with its death animation.
-- **Performance**
-  - **Terrain:** drawn in chunks, with water in a single draw call.
-  - **Loading:** models are prepared at level start, so new parts of the map no longer stutter into view.
-  - **Shadows on the GPU:** blob shadows are drawn on the GPU.
-  - **Scene building:** cheaper per-object work.
-  - **Result:** the stress test above runs in about 4.3 ms per frame (was 8.0 ms).
-- **Engine**
-  - **Toolchain:** x64, C++20 and SDL 3, built with a vcpkg manifest and Windows CI.
-  - **Profiling:** a Tracy profiler client and a benchmark mode with frame-time reports.
-- **Mods**
-  - **File system:** a layered file system that follows the original's archive rules (the newest timestamp wins).
-  - **Mod folders:** mod folders with `mod.json`, and a Mods menu to enable them and change their load order.
-- **Robustness**
-  - **Scripts:** the game-set parser stays in sync on unimplemented keywords.
-  - **Missing files:** broken mod combinations no longer crash.
-- **AI**
-  - **Kingmaker AI:** stalls fixed (deleted objects, work orders, farms at the map's corner, an upgrade waited for forever), and towns get their walls and gatehouse.
-    - **Commissions:** saved and loaded. `FORCE_BALANCE` serves the least filled requirement first, as the original does, and a commission waiting for a busy building keeps its resources.
-    - **Sight:** the AI sees by sight (`IS_VISIBLE`, `IS_DISCOVERED`).
-  - **Differential tests against the original:** wkbai plays 30 game seconds on from a save of the original's (Marjoria's Keep) and is compared object by object with the original's own save after the same time. 135 of 138 unit and building counts now match.
-  - **Aggressive AI** (skirmish setting, on by default): at most 80 peasants, barracks first, armies launched as soon as they can be paid, food-only fighters when wood or gold is short, and all of an AI's armies sent against its nearest enemy (an AI destroyed per 25-minute 8-player game, none before).
-  - **Diplomacy:** AIs' diplomatic offers reach the players offered to, whose scripts answer them.
-  - **Headless AI-vs-AI test** (test 30) with a census per minute, and a tournament tool over several seeds.
-- **Pathfinding:** units keep to the terrain their passability fields allow, as the original's per-tile test does (no walking over water, river beds or mountains).
-- **Graphics options** (enhanced renderer)
-  - **Post-processing:** ambient occlusion, bloom, and **FXAA** anti-aliasing (on by default).
-  - **Anisotropic filtering:** up to 16x for the terrain, the water and the models.
-  - **Real unit shadows** from the sun's shadow map, and wall shadows (higher-resolution shadow maps optional).
-  - **Fire lights:** burning buildings, flaming arrows and fire spells light the terrain and the models around them.
-  - **Water, in six levels:**
-    - **Off:** a plain colour, as the original without its water surface.
-    - **Original:** the original's textured water.
-    - **Low:** sky and screen-space reflections, refraction, depth colour, shore foam and flowing rivers.
-    - **Medium:** the ocean look on the flat surface.
-    - **High:** tessellated ocean waves with crest foam and surf.
-    - **Ultra:** finer waves out to the far distance.
-  - **Ocean:** long, smooth waves in groups that never repeat, deep teal water with light through the crests, sun sparkles and patchy foam.
-  - **Rivers:** they follow the geography, each with its own coordinates along and across its channel (from where the water meets the terrain). Small ripples are carried downstream by a current that is faster where the river is narrow, with foam along the banks and short-lived crests where it runs tight. They drain into the largest water they meet or off the map, and blend smoothly into the sea.
-  - **Reflections:** of what is on screen (from Low up) and of the sky box itself.
-  - **Terrain tessellation:** a smooth surface on the GPU, with objects placed exactly on it. The game's own heights are unchanged.
-  - **Grass:** PBR grass blades on green ground, with density (up to 24 per square metre) and height sliders, thinning out with the distance.
-  - **Model highlights:** per-pixel lighting with GGX sun highlights, light from the sky box's colours, and override packs (`<texture>_normal`, `<texture>_orm`) for modders (off by default).
-  - **Particles:** sprites, and streaks (wood chips, sparks) drawn as thin lines.
-- **Formats:** glTF 2.0 models (import as overrides, export with `"exportGltf"`), DDS textures (BC1-BC5, BC7) and KTX2 (RGBA8, BC1-BC5, BC7; BC7 uploaded compressed).
-- **Map editor** (Map Editor in the main menu; F8 turns it on and off there, not in games or replays): heights, texture painting, lakes, objects, the players' resources and diplomacy, terrain zones, a new blank map, undo, a new minimap on saving, a check (missing start cameras, players that can't be reached by land), and save-and-play.
-- **Settings:** the Options screen (main menu, in-game menu, or **F10** in a game) with the view distance, fog, field of view, colour grading, shadows, water, upscaling and camera speed.
+### Graphics
+
+wkbai draws with [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore) on **Direct3D 12 or Vulkan**. The *Original* settings look like the original game (its lighting, shadows, sky, fog and water, found by reverse engineering); everything below is optional, with its own setting.
+
+- **HD models:** glTF replacements of the original models, loaded as overrides from a mod or the user folder, with team colours, emblems, smoke and blood-drip points, animation, parallax occlusion mapping and damage states (Damaged, Derelict, Ruined). A set of hand-built HD buildings is in the works (in its own repository); the screenshots show only the ones already accepted.
+- **Lighting:** per-pixel PBR lighting of the models with GGX highlights, reflections (screen-space, and ray-traced at Ultra), sky light and **dynamic global illumination**: light bounced from the ground and the buildings, and at Ultra the light of lit windows, fires and lamps from the models' emissive maps.
+- **Shadows:** sun shadow maps for every unit and building, **ray-traced shadows** (buildings, trees with their leaves, animated units), contact shadows and cloud shadows.
+- **Sky:** a physical sky with sunrises and sunsets, **volumetric clouds** (cumulus, cumulonimbus with anvils, cirrus, lenticulars, stratus decks; each weather its own), light shafts and multiple scattering.
+- **Day and night:** the sun and the moon move; the moon shows its phase, lit from the sun's side, and its phase sets how bright the night is.
+- **Weather drawn:** rain and snow, snow cover on the ground, roofs and models, footprints, wet ground and floods, frozen rivers and waterfalls, autumn leaves, dry summer grass, rainbows, heat shimmer and chimney smoke.
+- **Water** in eight levels, from the original's texture to tessellated ocean waves with crest foam and surf; rivers that flow downhill (also on slopes, with rapids and falls), waterfalls, and **ice that breaks** where artillery hits it.
+- **Fire:** procedural flames with glow, smoke, heat shimmer and fire light on everything around.
+- **Trees and grass:** the forest is drawn and culled on the GPU (30,000 trees: 50 ms of CPU per frame, were 150-200 ms), trees and grass bend in the wind in gusts, and their shadows sway with them. PBR grass blends across tile edges.
+- **Extend map:** the land goes on past the edge of the playable map (seas, ranges, rivers, forests and weather), out to about 30 km, cached on disk.
+- **Terrain:** tessellation, PBR material maps for the ground (normal, ORM and height maps from texture packs) with **parallax occlusion mapping** and self-shadowed relief, ground Fresnel from the live sky.
+- **Parallax occlusion mapping on models**, with depth sliders for the models and the ground; stained-glass refraction.
+- **Post-processing:** ambient occlusion, bloom, FXAA, TAA, **FSR 3.1** anti-aliasing and upscaling (or FSR 1), tilt-shift, motion blur, colour grading.
+- **Formats:** glTF 2.0 (import as overrides, export of the originals), DDS and KTX2 textures with BC7.
+
+### Simulation
+
+All of these are game settings in the lobby, off by default; with them off, games play as in the original.
+
+- **Day and night:** night sight, peasants who sleep at night, colder nights.
+- **Seasons and weather:** ten weathers, temperature (freezing, thirst, shelter), floods and droughts, snow and ice to walk on, fields lying fallow in winter, wildfires; lightning sets buildings on fire, rain puts fires out.
+- **Wind:** fans fires downwind, chills, and speeds or slows boats; a wind gauge on the HUD.
+- **River currents** carry units along and make them swim; war machines sink.
+- **Breaking ice:** units fall in, swim out or drown, and the kill goes to whoever broke the ice.
+
+### AI
+
+- **The ministry AI:** an AI made of ministries (intelligence through the fog of war, a strategist with a personality, war and generals, diplomacy with grudges, economy, builders, research), with difficulty settings for its vision, reaction and generals.
+- **AI at sea:** every AI builds docks and ships, ferries its armies across the water, lands and attacks.
+- **Lua AIs:** one per slot, moddable, with the bundled Advanced AI; AIs that adapt to the weather.
+- **The original's Kingmaker AI** with its stalls fixed, checked against the original by differential tests on its saves.
+
+### Maps and editing
+
+- **18 Great Britain maps** made from OS Terrain 50, with the real woods (about 20,000 trees a map) and rivers, and campaign provinces as skirmish maps.
+- **wkbai's own map format** (`.wkbai` folders), a terrain generator (heightmap and elevation import, ground materials by rule), compiled in the background, and import and export of the original's maps.
+- **Map editor** (Map Editor in the main menu): heights, texture painting, lakes, objects, players, zones, scripts, new maps of any size, undo, a check, and save-and-play.
+
+### Interface
+
+- **In-game help:** 464 pages, opened with F1, Shift+F1 or Alt+right-click > Help.
+- **Options** for every setting, with a Default button per Graphics page, **rebindable keys**, display modes, high-DPI and interface size; ImGui windows in Warrior Kings' colours.
+- **The original's windows** that wkbre2 lacked: diplomacy, the Tavern, tributes, Valhalla armies, disguises, minimap alerts, formations; the original's hot keys and the Patrol order.
+- **Statistics (F6), the timeline (F7) and a chronicle** with each unit's name, age, kills and heroes.
+- **Recordings and a replay viewer** (0.5x to 16x), a loading screen with real progress, headphone 3D sound and reverb.
+- **Multiplayer:** matchmaking (local, Nakama, EOS), an AI that takes over for a player who leaves, joining running games, spectators, passwords and mod checks.
+
+### Performance
+
+- A **10,000-unit battle** fits in the 20 ms simulation step; 10,000 attack orders take 0.14 s (were 2.8 s).
+- Path finding on worker threads and with flow fields: a 200-unit order across the map takes 18 ms (was 678 ms).
+- A six-AI game still runs at full speed after 30 minutes.
+- 2,524 models load in about 5 s (were 30-46 s); a shader cache halves the start-up time.
+- A GPU memory budget, block-compressed textures on the GPU, and per-pass GPU and CPU timings (Ctrl+F12).
+
+### Modding and tools
+
+- A **layered file system** with the original's archive rules, mod folders with `mod.json`, a Mods menu, hot reload, and overrides for models, textures, scripts and the Lua interface.
+- **Agent control:** a local socket, an MCP server and a Python client to drive the game, for AI evaluation.
+- A **versioned save format**, a headless test suite, a Tracy profiler client and a benchmark mode.
+
+### In the works (on branches, not in `modernization` yet)
+
+Generated ground transitions, lockstep multiplayer, and more HD models.
 
 ## Status
 
-The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase:** 5, gameplay parity. **Next:** Phase 5: test 36's last differences (wood after loading: saved animation-loop triggers; tree stumps; a farm foundation), the original's arrival rule for attachment paths; Phase 8: army retreat and regrouping; Phase 6: the new map format and editor features.
-
-| Phase | Progress | Done | Open |
-|---|---|---|---|
-| 0 Setup & quick wins | 7/7 | Git repo, Pristine SHA-256 hashes, Toolchain installed, REA + Ghidra connected, DXVK quick win, Baseline perf captures, Identify version.dll | — |
-| 1 Asset & format knowledge | 4/4 | BCP reader/extractor, Format specs, Round-trip tests, Asset inventory | — |
-| 2 Binary RE (ongoing) | 7/7 | Exe in Ghidra via REA, RTTI class hierarchy, Keyword diff vs wkbre2, Original file system (BCP load rule), Renderer interface signatures, Pathfinding/combat/AI RE, Differential test harness | — |
-| 3 Engine foundation (wkbre2) | 6/6 | Fork & build wkbre2, Run against game data, CI + round-trip tests, x64 · C++20 · SDL3, Layered VFS (BCP → mods), RHI decision + Tracy | — |
-| 4 Modern renderer | 8/8 | Diligent integration (D3D12/Vulkan), Faithful mode, GPU skinning/instancing/culling, PBR materials, Lighting & effects, Splat-map terrain, glTF / KTX2, Resolution & UI scaling | — |
-| **5 Gameplay parity** (current) | 7/8 | Evaluate WKB Plus patch, Minimap + DISPLAY_ON_MINIMAP, Main menu, Settings, in-game Esc menu, Play-test bugs: stampdown overlap, formations, guard, range circles, rally flag, Deterministic simulation, Fix original engine bugs, Population limit up to 10,000 | Close script/order gaps (in progress) |
-| 6 Map editor | 1/3 | Undo / play-test / validation | Port wkbre editor features (in progress), Export original + new format (in progress) |
-| 7 Modding | 4/4 | Mod package format, Asset/script/Lua overrides, Hot reload + mod manager, Modding docs | — |
-| 8 AI overhaul | 2/4 | RE original AI, Headless AI-vs-AI testing | Strategic layer (in progress), Operational/tactical layers (in progress) |
-| 9 Release | 1/1 | Launcher + packaging | — |
-
-**Play-testing:** the issues found in three play tests are fixed or listed in the reverse-engineering repository's notes (building placement, formations, guarding, range circles, rally flags, AI armies and walls, particles, wall shadows, the HUD and the settings steppers).
+wkbai follows an 18-phase plan. Phases 0-15 are done (setup, formats, reverse engineering, engine, renderer, gameplay parity, performance, replays, multiplayer, day and night with seasons and weather, map editor, modding, the AI overhaul, release, agent control and the original's remaining features). Phase 16 (the ministry AI) is waiting for its play test, and phase 17 (map and campaign authoring) is under way.
 
 ## Usage
 
@@ -113,7 +124,7 @@ The project follows a ten-phase plan, from setup (phase 0) to release (phase 9).
   - **gamePath:** the folder where the game is installed, the one that contains data.bcp. Write each backslash twice (`\\`).
   - **gameVersion:** 1 for **Warrior Kings**, 2 for **Warrior Kings: Battles**.
   - **diligentBackend:** optionally, `"d3d12"` (the default) or `"vulkan"`.
-- Launch **wkbai.exe**. Press **F10** in a game for the Options screen. Settings, saves and mods go to `%APPDATA%\wkbai` (copied from `%APPDATA%\wkbre2` the first time).
+- Launch **wkbai.exe**. Press **F10** in a game for the Options screen and **F1** for the help. Settings, saves and mods go to `%APPDATA%\wkbai` (copied from `%APPDATA%\wkbre2` the first time).
 
 **Note:** if the program closes at startup without an error, check **wkconfig.json** for syntax errors (missing commas, quotes or braces).
 
