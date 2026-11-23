@@ -619,7 +619,7 @@ static float PomRange;
 // island's edge (the edges of walls, worse the deeper the relief). A height under POM_GUTTER
 // counts as the surface for the view ray (it stops at the island's edge) and as no relief for
 // the sun ray (PomShadowDepth: the gap casts no shadow).
-static const float POM_GUTTER = 0.02;
+static const float POM_GUTTER = 0.05;
 
 float PomDepth(float2 uv)
 {
@@ -664,7 +664,14 @@ void PrepareSurface(VS_OUTPUT input)
 	float3 gu = (dp2perp * SurfDx.x + dp1perp * SurfDy.x) / det;   // du per metre, in world space
 	float3 gv = (dp2perp * SurfDx.y + dp1perp * SurfDy.y) / det;
 	float3 e = normalize(input.WorldPos - FogCamera.xyz);          // from the eye
-	float en = max(-dot(e, n), 0.15);
+	// Faces seen edge-on: the relief fades out (gone below 0.15, whole from 0.5), and the slide
+	// sideways is capped at 2.7 times the depth (en at least 0.35). The ray had slid up to 6.6
+	// times the depth (1.6 m at depth 4x) off its UV island into the atlas' black gap: dark
+	// outlines along the walls' edges.
+	PomRange *= smoothstep(0.15, 0.5, -dot(e, n));
+	if (PomRange < footprint * 0.33)
+		return;
+	float en = max(-dot(e, n), 0.35);
 	float3 lat = (e + n * en) / en;                                // sideways per metre of depth
 	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
 	// (Low: half the steps of High, and half the sun ray's)
