@@ -14,6 +14,8 @@
 struct Camera;
 // buffers a ray-tracing structure is built from get BIND_RAY_TRACING (the device can)
 extern bool g_rayTracingBuffers;
+// a query that may be read with GetData: made, and (Direct3D 12) holding a query heap slot
+bool QueryReadable(Diligent::IQuery* q);
 
 // The Diligent IRenderer, as seen by the renderers that draw with Diligent directly
 // (DiligentEnhancedSceneRenderer, DiligentEnhancedTerrainRenderer).

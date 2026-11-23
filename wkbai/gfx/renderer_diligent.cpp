@@ -52,9 +52,22 @@ bool g_rayTracingBuffers = false;
 #define NOMINMAX
 #include <Windows.h>
 #include <dxgi1_4.h>
+#include <d3d12.h>
+#include "QueryD3D12.h" // (QueryReadable: a query's heap slot; needs d3d12.h first)
 #pragma comment(lib, "dxgi.lib")
 
 using namespace Diligent;
+
+// A query that may be read: made, and (Direct3D 12) holding a slot in the query heap. A timestamp
+// query whose EndQuery found the heap full keeps no slot and a null query manager, and Diligent's
+// GetData then reads through that null pointer (an access violation, not a false).
+bool QueryReadable(IQuery* q)
+{
+	if (!q)
+		return false;
+	RefCntAutoPtr<IQueryD3D12> q12(q, IID_QueryD3D12);
+	return !q12 || q12->GetQueryHeapIndex(0) != ~Uint32{0}; // (Vulkan: no such interface)
+}
 
 // Picks the Vulkan physical device: discrete over integrated, then the newest API and driver
 // version. The same GPU can be listed twice when two GPUs have different drivers (seen with a
@@ -662,13 +675,30 @@ struct DiligentRenderer : DiligentGfx
 	DiligentPostProcess::FogOfWar fog;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
-	// the per-pass timings' GPU timestamps (GpuProfiler): a list of queries per frame slot
+	// the per-pass timings' GPU timestamps (GpuProfiler): a list of queries per frame slot.
+	// Every timestamp query keeps its slot in the D3D12 query heap until it is ended again, so
+	// these hold up to PROFILER_FRAMES * MAX_STAMPS slots of TIMESTAMP_POOL (with the frame and GI
+	// timers). With the ray-traced shadows on, a frame's passes went past Diligent's default
+	// pool of 512 (PERFORMANCE.sav, 2026-11-23): "Failed to allocate D3D12 query", and the next
+	// GetData on that query read through the null query manager Diligent leaves in it
+	// (QueryManagerD3D12::ReadQueryData, an access violation). Now the pool is bigger, a frame
+	// stamps at most MAX_STAMPS (the rest: no GPU time), and a query without a slot is never read.
+	static constexpr uint32_t TIMESTAMP_POOL = 4096;
+	static constexpr uint32_t MAX_STAMPS = 640;
 	struct Stamps : GpuTimestampSource {
 		IRenderDevice* device = nullptr;
 		IDeviceContext* ctx = nullptr;
 		uint32_t slot = 0;
+		bool cappedSaid = false;
 		std::vector<RefCntAutoPtr<IQuery>> queries[PROFILER_FRAMES];
 		void stamp(uint32_t index) override {
+			if (index >= MAX_STAMPS) {
+				if (!cappedSaid) {
+					cappedSaid = true;
+					printf("GPU profiler: more than %u pass timestamps in a frame, the rest without GPU times\n", MAX_STAMPS);
+				}
+				return;
+			}
 			auto& q = queries[slot];
 			while (q.size() <= index) {
 				QueryDesc qd;
@@ -688,7 +718,7 @@ struct DiligentRenderer : DiligentGfx
 			uint64_t first = 0, freq = 0;
 			for (uint32_t i = 0; i < count; i++) {
 				QueryDataTimestamp d;
-				if (!q[i] || !q[i]->GetData(&d, sizeof(d), false) || !d.Frequency)
+				if (!QueryReadable(q[i]) || !q[i]->GetData(&d, sizeof(d), false) || !d.Frequency)
 					return false;
 				if (i == 0) { first = d.Counter; freq = d.Frequency; }
 				ms[i] = (double)((int64_t)(d.Counter - first)) * 1000.0 / (double)freq;
@@ -1470,6 +1500,7 @@ struct DiligentRenderer : DiligentGfx
 			factory->SetMessageCallback(DiligentMessage);
 			EngineVkCreateInfo eci;
 			eci.EnableValidation = validation;
+			eci.QueryPoolSizes[QUERY_TYPE_TIMESTAMP] = TIMESTAMP_POOL; // (Stamps)
 			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
 			eci.Features.TimestampQueries = DEVICE_FEATURE_STATE_OPTIONAL; // the benchmark's GPU times
 			eci.Features.RayTracing = DEVICE_FEATURE_STATE_OPTIONAL; // the ray-traced shadows (DiligentRayShadows)
@@ -1492,6 +1523,7 @@ struct DiligentRenderer : DiligentGfx
 				ferr("Diligent: could not load d3d12.dll.");
 			EngineD3D12CreateInfo eci;
 			eci.EnableValidation = validation;
+			eci.QueryPoolSizes[QUERY_TYPE_TIMESTAMP] = TIMESTAMP_POOL; // (Stamps: 8 bytes each)
 			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
 			eci.Features.TimestampQueries = DEVICE_FEATURE_STATE_OPTIONAL; // the benchmark's GPU times
 			eci.Features.RayTracing = DEVICE_FEATURE_STATE_OPTIONAL; // the ray-traced shadows (DiligentRayShadows)
@@ -1670,7 +1702,8 @@ struct DiligentRenderer : DiligentGfx
 			// this slot's last frame: its time, if the GPU is done with it
 			if (gpuQueryIssued[q]) {
 				QueryDataTimestamp a, b;
-				if (gpuStart[q]->GetData(&a, sizeof(a), false) && gpuEnd[q]->GetData(&b, sizeof(b), false) && a.Frequency)
+				if (QueryReadable(gpuStart[q]) && QueryReadable(gpuEnd[q])
+					&& gpuStart[q]->GetData(&a, sizeof(a), false) && gpuEnd[q]->GetData(&b, sizeof(b), false) && a.Frequency)
 					g_gpuFrameMs = (double)(b.Counter - a.Counter) * 1000.0 / (double)a.Frequency;
 			}
 			ctx->EndQuery(gpuStart[q]);
