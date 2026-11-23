@@ -84,6 +84,15 @@ void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::
 				ld.normalMap = texcache->getTextureIfCached(nrm.c_str());
 				if (!ld.normalMap) {
 					Bitmap bmp = Bitmap::loadBitmap((texcache->directory + nrm).c_str());
+					// a bump map as a grey PNG (the generated transitions', TransitionGen.h): its
+					// first channel, a byte a texel as the PCX's
+					if (bmp.format != BMFORMAT_P8) {
+						const Bitmap rgba = bmp.convertToR8G8B8A8();
+						bmp.format = BMFORMAT_P8;
+						bmp.pixels.resize((size_t)bmp.width * bmp.height);
+						for (size_t i = 0; i < (size_t)bmp.width * bmp.height; i++)
+							bmp.pixels[i] = rgba.pixels[i * 4];
+					}
 					Bitmap nmap; nmap.width = bmp.width; nmap.height = bmp.height; nmap.format = BMFORMAT_R8G8B8A8;
 					nmap.pixels.resize(nmap.width * nmap.height * 4);
 					uint8_t* bmpix = (uint8_t*)bmp.pixels.data();

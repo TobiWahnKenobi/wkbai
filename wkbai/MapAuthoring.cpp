@@ -375,7 +375,14 @@ json Catalog(const GameSet& gs, const std::string& gameSetFile, bool edges)
 		TerrainTextureDatabase db(file.c_str());
 		const EdgeRules er = ReadEdgeRules(file);
 		json groups = json::array();
+		size_t generated = 0;
 		for (const auto& [name, grp] : db.groups) {
+			// (the generated transitions, TransitionGen.h: made on each player's machine for the map
+			// compiler's ground solver, not the game's texture set: counted, not listed)
+			if (grp && !grp->textures.empty() && !grp->textures.begin()->second->genCorners[0].empty()) {
+				generated++;
+				continue;
+			}
 			json g;
 			g["name"] = name;
 			auto at = gs.associatedTileTexGroups.find(name);
@@ -440,7 +447,7 @@ json Catalog(const GameSet& gs, const std::string& gameSetFile, bool edges)
 			textureCount += grp->textures.size();
 		}
 		ruleCount += er.count;
-		dbs.push_back({ { "file", file }, { "groups", groups }, { "groupCount", db.groups.size() }, { "edgeRules", er.count } });
+		dbs.push_back({ { "file", file }, { "groups", groups }, { "groupCount", db.groups.size() - generated }, { "generatedGroups", generated }, { "edgeRules", er.count } });
 	}
 	c["textureDatabases"] = dbs;
 	c["edgeRuleFormat"] = edges ? "per texture and side: [group, id, turn 0-3, xflip, zflip, the other texture's side facing this one]"

@@ -11,6 +11,7 @@
 #include "tags.h"
 #include "util/BinaryReader.h"
 #include "util/StriCompare.h"
+#include "TransitionGen.h"
 
 void TerrainTextureDatabase::load(const char * filename)
 {
@@ -72,6 +73,9 @@ void TerrainTextureDatabase::load(const char * filename)
 		}
 		parser.advanceLine();
 	}
+	// wkbai's generated transitions for pairs the set has none for (made from the game's own
+	// pictures on this machine, TransitionGen.h)
+	TransitionGen::Add(*this, filename);
 }
 
 void TerrainTextureDatabase::translate(const char* ltttFilePath)
