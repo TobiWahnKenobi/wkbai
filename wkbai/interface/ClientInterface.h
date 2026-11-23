@@ -28,6 +28,17 @@ struct TerrainRenderer;
 struct IRenderer;
 struct SceneRenderer;
 struct ClientGameObject;
+struct CommonGameObject;
+
+// What the lower left panel shows for a selected object. PanelSubjects: the figures in its picture,
+// the object itself, or for a formation one member of each type (the first of each, by id, so they
+// don't flicker), in the order their types came in. PanelSubject: whose hit points, name and stats
+// it shows, the object itself or the member of a formation of one type; a formation of several
+// types itself (no stats or names apply to it, the user's wish). A formation's own blueprint has no
+// model and no hit points, and the panel stayed empty (the user's report, 2026-11-22, after clicks
+// on members came to select the formation).
+std::vector<const CommonGameObject*> PanelSubjects(const CommonGameObject* obj);
+const CommonGameObject* PanelSubject(const CommonGameObject* obj);
 struct GameObjBlueprint;
 struct Command;
 struct ParticleContainer;

@@ -3190,6 +3190,31 @@ void ClientInterface::drawStainedGlassPanel(int x, int y, int w, int h)
 	ImGui::GetBackgroundDrawList()->AddImage(glassFrames[f], ImVec2((float)x, (float)y), ImVec2((float)(x + w), (float)(y + h)));
 }
 
+std::vector<const CommonGameObject*> PanelSubjects(const CommonGameObject* obj)
+{
+	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+		return obj ? std::vector<const CommonGameObject*>{ obj } : std::vector<const CommonGameObject*>{};
+	std::map<const GameObjBlueprint*, const CommonGameObject*> first;
+	for (const auto& [type, members] : obj->children)
+		for (const CommonGameObject* m : members)
+			if (m && m->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !(m->flags & CommonGameObject::fTerminated)) {
+				const CommonGameObject*& f = first[m->blueprint];
+				if (!f || m->id < f->id)
+					f = m;
+			}
+	std::vector<const CommonGameObject*> out;
+	for (const auto& [bp, m] : first)
+		out.push_back(m);
+	std::sort(out.begin(), out.end(), [](const CommonGameObject* a, const CommonGameObject* b) { return a->id < b->id; });
+	return out;
+}
+
+const CommonGameObject* PanelSubject(const CommonGameObject* obj)
+{
+	const std::vector<const CommonGameObject*> subjects = PanelSubjects(obj);
+	return subjects.size() == 1 ? subjects[0] : obj;
+}
+
 // The selected (else the hovered) character standing in the middle of the lower left panel's
 // stained-glass window, slowly turning, as the original's selection window shows it: its model
 // with its current animation, drawn after the HUD into a square there (Diligent only).
@@ -3199,15 +3224,22 @@ void ClientInterface::drawSelectionPortrait()
 	FrontEnd* frontEnd = FrontEnd::get();
 	if (!dgfx || !sceneRenderer || !scene || !client->getLevel() || !loadingDone || editorOn || (frontEnd && frontEnd->isOpen()))
 		return;
-	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
-	if (!obj)
-		obj = nextSelectedObject.get();
-	// characters and buildings (a selected building stands in the window too; with the HD
-	// models its model is the glTF replacement, larger and with its own centre)
-	if (!obj || (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
-		return;
-	Model* model = obj->getModel();
-	if (!model)
+	ClientGameObject* sel = selection.empty() ? nullptr : selection.begin()->get();
+	if (!sel)
+		sel = nextSelectedObject.get();
+	// the figures: the object, or a formation's member of each type (PanelSubjects); characters and
+	// buildings (a selected building stands in the window too; with the HD models its model is the
+	// glTF replacement, larger and with its own centre)
+	struct Figure { ClientGameObject* obj; Model* model; Vector3 centre, half; };
+	std::vector<Figure> figures;
+	for (const CommonGameObject* c : PanelSubjects(sel)) {
+		auto* o = (ClientGameObject*)c;
+		if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+			continue;
+		if (Model* m = o->getModel())
+			figures.push_back({ o, m, Vector3(), Vector3() });
+	}
+	if (figures.empty())
 		return;
 	// the window's middle in the panel (330 x 326 at the bottom left), in points: where the rose's
 	// petals meet in Bottom_Left_Panel.tga
@@ -3216,55 +3248,80 @@ void ClientInterface::drawSelectionPortrait()
 	const float panelY = g_windowHeight / s - 326.0f;
 	const int px = (int)((CX - SIZE / 2) * s), py = (int)((panelY + CY - SIZE / 2) * s), size = (int)(SIZE * s);
 
-	static SceneEntity portrait;
 	const float angle = (float)(SDL_GetTicks() % 12000) / 12000.0f * 6.2831853f;
-	portrait = obj->sceneEntity;
-	portrait.model = model;
-	// fitted to the model's bounding box, as the hover pick tests it (its bounding sphere is
-	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
+	// each figure fitted to its model's bounding box, as the hover pick tests it (its bounding sphere
+	// is loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
 	// zoom in and out
-	const auto box = model->interpolateBoundingBox(0);
-	Vector3 centre = (box[0] + box[1]) * 0.5f;
-	Vector3 half = (box[1] - box[0]) * 0.5f;
-	// a character: centred on its body, not on the box of all it holds (a spear's tip or a
-	// banner pulled the figure off the window's middle; the user saw it left of and below it).
-	// Its middle is its median vertex at frame 0 on each axis (most vertices are the body's);
-	// the square fits the 3rd to the 97th percentile around it. Once per model.
-	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
-		static std::map<Model*, std::pair<Vector3, Vector3>> bodies; // middle, half extent
-		auto it = bodies.find(model);
-		if (it == bodies.end()) {
-			std::pair<Vector3, Vector3> body{ centre, half };
-			StaticModel* sm = model->getStaticModel();
-			const size_t n = sm ? sm->getMesh().vertices.size() / 3 : 0;
-			const float* v = n ? model->interpolate(0) : nullptr;
-			if (v && n >= 20) {
-				std::vector<float> axis(n);
-				for (int a = 0; a < 3; a++) {
-					for (size_t i = 0; i < n; i++)
-						axis[i] = v[i * 3 + a];
-					std::sort(axis.begin(), axis.end());
-					const float lo = axis[n * 3 / 100], mid = axis[n / 2], hi = axis[n * 97 / 100];
-					(a == 0 ? body.first.x : a == 1 ? body.first.y : body.first.z) = mid;
-					(a == 0 ? body.second.x : a == 1 ? body.second.y : body.second.z) = std::max(hi - mid, mid - lo);
+	for (Figure& f : figures) {
+		const auto box = f.model->interpolateBoundingBox(0);
+		f.centre = (box[0] + box[1]) * 0.5f;
+		f.half = (box[1] - box[0]) * 0.5f;
+		// a character: centred on its body, not on the box of all it holds (a spear's tip or a
+		// banner pulled the figure off the window's middle; the user saw it left of and below it).
+		// Its middle is its median vertex at frame 0 on each axis (most vertices are the body's);
+		// the square fits the 3rd to the 97th percentile around it. Once per model.
+		if (f.obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+			static std::map<Model*, std::pair<Vector3, Vector3>> bodies; // middle, half extent
+			auto it = bodies.find(f.model);
+			if (it == bodies.end()) {
+				std::pair<Vector3, Vector3> body{ f.centre, f.half };
+				StaticModel* sm = f.model->getStaticModel();
+				const size_t n = sm ? sm->getMesh().vertices.size() / 3 : 0;
+				const float* v = n ? f.model->interpolate(0) : nullptr;
+				if (v && n >= 20) {
+					std::vector<float> axis(n);
+					for (int a = 0; a < 3; a++) {
+						for (size_t i = 0; i < n; i++)
+							axis[i] = v[i * 3 + a];
+						std::sort(axis.begin(), axis.end());
+						const float lo = axis[n * 3 / 100], mid = axis[n / 2], hi = axis[n * 97 / 100];
+						(a == 0 ? body.first.x : a == 1 ? body.first.y : body.first.z) = mid;
+						(a == 0 ? body.second.x : a == 1 ? body.second.y : body.second.z) = std::max(hi - mid, mid - lo);
+					}
 				}
+				it = bodies.emplace(f.model, body).first;
 			}
-			it = bodies.emplace(model, body).first;
+			f.centre = it->second.first;
+			f.half = it->second.second;
 		}
-		centre = it->second.first;
-		half = it->second.second;
 	}
-	// the footprint's radius as it turns, and the half height
-	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
-	const float halfHeight = std::max(0.3f, half.y);
+	// A formation of several types (the user's wish: all its types in the window, overlapping as
+	// they may): one figure of each in a row across the window, every other one a step back, each
+	// turning about its own middle. One figure stands at the middle as before.
+	const size_t count = figures.size();
+	float widest = 0.3f;
+	for (const Figure& f : figures)
+		widest = std::max(widest, std::sqrt(f.half.x * f.half.x + f.half.z * f.half.z));
+	// (closer than their turning width: they overlap, and the figures stay large; at 1.3 times it
+	// three types stood small in the window)
+	const float spacing = widest * 0.9f;
+	static std::vector<SceneEntity> portraits;
+	portraits.assign(count, SceneEntity());
+	float low = 1e9f, high = -1e9f, nearZ = 0.0f, farZ = 0.0f;
+	for (size_t i = 0; i < count; i++) {
+		const Figure& f = figures[i];
+		const float x = ((float)i - (float)(count - 1) * 0.5f) * spacing;
+		const float z = count > 1 && (i % 2) ? widest * 0.8f : 0.0f;
+		SceneEntity& p = portraits[i];
+		p = f.obj->sceneEntity;
+		p.model = f.model;
+		// turning about its centre's vertical (a building's centre is often off its origin: it
+		// swung out of the square), then set at its place in the row
+		const Vector3 axis(f.centre.x, 0.0f, f.centre.z);
+		p.transform = Matrix::getTranslationMatrix(-axis) * Matrix::getRotationYMatrix(angle) * Matrix::getTranslationMatrix(Vector3(x, 0.0f, z));
+		// lit normally (a selected unit is drawn unlit as its highlight; a placed building red or green)
+		p.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING | SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
+		low = std::min(low, f.centre.y - f.half.y);
+		high = std::max(high, f.centre.y + f.half.y);
+		farZ = std::max(farZ, z);
+	}
+	// the group's middle and extent (one figure: its own, as before)
+	const Vector3 centre = count == 1 ? Vector3(0.0f, figures[0].centre.y, 0.0f) : Vector3(0.0f, (low + high) * 0.5f, (nearZ + farZ) * 0.5f);
+	// the footprint's radius as it turns (across the row), and the half height
+	const float footprint = std::max(0.3f, (float)(count - 1) * 0.5f * spacing + widest);
+	const float halfHeight = std::max(0.3f, count == 1 ? figures[0].half.y : (high - low) * 0.5f);
 	const float radius = std::sqrt(footprint * footprint + halfHeight * halfHeight);
-	// turning about its centre's vertical (a building's centre is often off its origin: it
-	// swung out of the square)
-	const Vector3 axis(centre.x, 0.0f, centre.z);
-	portrait.transform = Matrix::getTranslationMatrix(-axis) * Matrix::getRotationYMatrix(angle) * Matrix::getTranslationMatrix(axis);
-	// lit normally (a selected unit is drawn unlit as its highlight; a placed building red or green)
-	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING | SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
-	// the camera a little above, the figure filling the square
+	// the camera a little above, the figures filling the square
 	Camera cam;
 	cam.fovY = 0.6f;
 	cam.aspect = 1.0f;
@@ -3284,7 +3341,8 @@ void ClientInterface::drawSelectionPortrait()
 	cam.sceneMatrix = cam.viewMatrix * cam.projMatrix;
 
 	scene->clear();
-	scene->add(&portrait);
+	for (SceneEntity& p : portraits)
+		scene->add(&p);
 	Camera* mainCamera = sceneRenderer->camera;
 	sceneRenderer->camera = &cam;
 	// ImGui leaves its last clip rectangle as the scissor
@@ -4157,9 +4215,10 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of
 	// that type (once it is found, so that the selection can be emptied again)
 	static bool benchmarkSelected = false;
-	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty() && !benchmarkSelected) {
+	if (BenchmarkEnabled() && client->getLevel() && selection.empty() && !benchmarkSelected) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("select", std::string());
-		if (!name.empty()) {
+		// (by type the client player's, so it needs one; "#<id>" any object)
+		if (!name.empty() && (name[0] == '#' || client->clientPlayer)) {
 			ClientGameObject* found = nullptr;
 			auto search = [&](ClientGameObject* obj, auto& self) -> void {
 				if (found)
@@ -4172,10 +4231,16 @@ void ClientInterface::iter()
 					for (CommonGameObject* child : children)
 						self(child->dyncast<ClientGameObject>(), self);
 			};
-			search(client->clientPlayer.get(), search);
+			// ("#<id>": that object, any player's, e.g. test 115's formation in "Mixed Formation.sav")
+			if (name[0] == '#')
+				found = client->findObject((uint32_t)std::strtoul(name.c_str() + 1, nullptr, 10));
+			else
+				search(client->clientPlayer.get(), search);
 			if (found) {
 				selection.insert(found);
 				benchmarkSelected = true;
+				printf("BENCHMARK selected %s %u\n", found->blueprint->name.c_str(), found->id);
+				fflush(stdout);
 			}
 		}
 	}
@@ -5135,6 +5200,14 @@ void ClientInterface::iter()
 		lua.set_function("selectPeasantsByActivity", [this](int row) { return selectPeasantsByActivity(row); });
 		lua.set_function("getTextWidth",
 			[](const std::string& text) { return (int)ImGui::CalcTextSize(text.c_str()).x; });
+		// what the lower left panel shows for the first selected (a formation: a member, PanelSubject)
+		lua.set_function("getPanelSubject",
+			[this]() -> uint32_t {
+				if (selection.empty()) return 0u;
+				const CommonGameObject* obj = PanelSubject(selection.begin()->get());
+				return obj ? obj->id : 0u;
+			}
+		);
 		lua.set_function("getFirstSelection",
 			[this]() -> uint32_t {
 				if (selection.empty()) return 0u;

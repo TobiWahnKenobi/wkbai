@@ -3694,13 +3694,47 @@ void Test_AIvsAI()
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), living, livingSoldiers, armyValue);
 				{
 					static const int cartsRequired = server.gameSet->items.names.getIndex("Carts Required");
-					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f\n", player->id, carts,
-						cartsRequired >= 0 ? player->getItem(cartsRequired) : -1.0f, villages, villageFood, villageWood, villageGold);
+					// (the Stats Screen's totals: what the farmers gathered, and what reached the stocks after the support)
+					static const int gathered = server.gameSet->items.names.getIndex("Total Food Gathered"), delivered = server.gameSet->items.names.getIndex("Total Food Delivered To Global Stocks");
+					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f; food gathered %.0f delivered %.0f\n", player->id, carts,
+						cartsRequired >= 0 ? player->getItem(cartsRequired) : -1.0f, villages, villageFood, villageWood, villageGold,
+						gathered >= 0 ? player->getItem(gathered) : -1.0f, delivered >= 0 ? player->getItem(delivered) : -1.0f);
 				}
 				std::string markerList;
 				for (const auto& [name, n] : markers)
 					markerList += " " + name + "=" + std::to_string(n);
 				printf("AITEST   markers:%s\n", markerList.c_str());
+					// the living characters by type (not the peasants), each with the army it is in (the Monks of a
+					// Celestial player: in the Healing Monk Army, or taken by the waves)
+					{
+						std::map<std::string, std::map<std::string, int>> types; // type -> army -> count
+						std::function<void(const CommonGameObject*, const std::string&)> walk = [&](const CommonGameObject* o, const std::string& army) {
+							for (const auto& [t, cs] : o->children)
+								for (const CommonGameObject* c : cs) {
+									const auto* so = (const ServerGameObject*)c;
+									if (so->deleted)
+										continue;
+									if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+										if (!AIUtil::IsPeasant(so))
+											types[c->blueprint->name][army]++;
+									}
+									else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+										walk(c, army.empty() ? c->blueprint->name : army);
+								}
+						};
+						walk(player, "");
+						std::string typeList;
+						for (const auto& [name, in] : types) {
+							int n = 0;
+							std::string where;
+							for (const auto& [army, k] : in) {
+								n += k;
+								where += (where.empty() ? "" : ",") + (army.empty() ? std::string("none") : army) + ":" + std::to_string(k);
+							}
+							typeList += " " + name + "=" + std::to_string(n) + "(" + where + ")";
+						}
+						printf("AITEST   types player %u:%s\n", player->id, typeList.c_str());
+					}
 				// the armies: type, then its members (direct children; formations count their own)
 				std::map<std::string, std::pair<int, int>> armies; // type -> (armies, members)
 				std::function<int(const CommonGameObject*)> members = [&](const CommonGameObject* o) {
@@ -3794,6 +3828,37 @@ void Test_AIvsAI()
 						works += " " + city->blueprint->name + "#" + std::to_string(city->id) + ":" + std::to_string(woi.unitFinder->eval(&cityCtx).size()) + " units";
 					}
 				printf("AITEST   work orders:%s\n", works.c_str());
+				// the foundations: where each is and how many of the player's characters have it as their
+				// task's target (a farm foundation nobody came to held Elinor's farms at 20 on Heavy Forest)
+				{
+					std::map<const ServerGameObject*, int> at;
+					std::vector<const ServerGameObject*> founds;
+					std::vector<ServerGameObject*> todo{ player };
+					while (!todo.empty()) {
+						ServerGameObject* o = todo.back();
+						todo.pop_back();
+						for (const auto& [ctype, kids] : o->children)
+							for (CommonGameObject* k : kids) {
+								ServerGameObject* c = (ServerGameObject*)k;
+								if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.find("Foundation") != std::string::npos)
+									founds.push_back(c);
+								else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+									Order* co = c->orderConfig.getCurrentOrder();
+									if (co && co->getCurrentTask())
+										if (const ServerGameObject* t = co->getCurrentTask()->target.get())
+											at[t]++;
+								}
+								todo.push_back(c);
+							}
+					}
+					std::string list;
+					for (const ServerGameObject* fo : founds) {
+						char buf[128];
+						snprintf(buf, sizeof(buf), " %s#%u (%.0f,%.0f) workers %d", fo->blueprint->name.c_str(), fo->id, fo->position.x, fo->position.z, at.count(fo) ? at[fo] : 0);
+						list += buf;
+					}
+					printf("AITEST   foundations player %u:%s\n", player->id, list.c_str());
+				}
 				// the commissions: suspended or not, and per requirement how many are needed and there
 				for (const CommissionInstance& ci : player->aiController.commissionInstances) {
 					ServerGameObject* handler = ci.handlerObject.get();
@@ -11369,6 +11434,41 @@ void Test_MixedFormation()
 		else
 			check(false, "a Training Dummy, a trainee and the Train command");
 	}
+	// the lower left panel for a selected formation shows a member (its picture, hit points and
+	// stats; the user's report: empty for a selected Spearmen formation)
+	if (merged) {
+		// (a formation of several types: one figure of each in the picture, no member's stats)
+		std::set<const GameObjBlueprint*> types;
+		for (const auto& [type, members] : merged->children)
+			for (const CommonGameObject* m : members)
+				if (m->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					types.insert(m->blueprint);
+		const std::vector<const CommonGameObject*> figures = PanelSubjects(merged);
+		std::set<const GameObjBlueprint*> shownTypes;
+		bool members = true;
+		for (const CommonGameObject* f : figures) {
+			shownTypes.insert(f->blueprint);
+			members &= f->getParent() == merged;
+		}
+		check(types.size() >= 2 && figures.size() == types.size() && shownTypes == types && members,
+			"the picture of a formation of " + std::to_string(types.size()) + " types shows one member of each (" + std::to_string(figures.size()) + ")");
+		check(PanelSubject(merged) == merged, "a formation of several types shows no member's stats");
+		// the scene saved, to look at the panel in the client (a benchmark run: "saveGame": "Mixed
+		// Formation.sav", "select": the formation's type printed here)
+		{
+			std::error_code ec;
+			std::filesystem::create_directories(g_userPath / "saved" / "Save_Games", ec);
+			const std::string save = PathToUtf8(g_userPath / "saved" / "Save_Games" / "Mixed Formation.sav");
+			// (the formation's owner as the human player: the client loads the save as it, and its
+			// panel shows the selection)
+			const std::vector<SrvGORef> clients = server.clientPlayerObjects;
+			server.clientPlayerObjects.clear();
+			server.clientPlayerObjects.emplace_back(player);
+			printf("MIXEDF saved %s (the formation: %s %u): %d\n", save.c_str(), merged->blueprint->name.c_str(), merged->id, (int)server.saveGame(save.c_str()));
+			server.clientPlayerObjects = clients;
+		}
+		check(figures.size() > 0 && PanelSubject(figures[0]) == figures[0] && PanelSubjects(figures[0]).size() == 1, "the panel of a selected unit shows the unit");
+	}
 	// an order on the formation's own member (a right-click inside it): refused, not followed
 	if (merged) {
 		ServerGameObject* member = nullptr;
@@ -11396,6 +11496,12 @@ void Test_MixedFormation()
 		fresh = CreateFormationFrom(server, player, twelve);
 		for (int i = 0; i < 20 * 10; i++)
 			StepServer(server, 1);
+	}
+	// a formation of one type (12 Spearmen): the panel shows one of its members, stats and all
+	if (fresh) {
+		const CommonGameObject* shown = PanelSubject(fresh);
+		check(shown && shown != fresh && shown->getParent() == fresh && PanelSubjects(fresh).size() == 1,
+			"the panel of a selected formation of one type shows one of its members");
 	}
 	if (fresh) {
 		const GameObjBlueprint* enemyBp = spearBp;

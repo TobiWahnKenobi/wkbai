@@ -1297,6 +1297,41 @@ void AIController::update()
 		for (size_t ri : buildOrder)
 			passes.emplace_back(ri, SIZE_MAX);
 		bool saving = false;
+		// What the saving holds back: the resources the fighter building saved for is short of (none
+		// of them for anything after it) and the rest of its cost (kept). Before, saving stopped every
+		// requirement after it: Elinor's Black Mass and Stables, short of gold with 100 gold and no
+		// miners, held her farms at 20 for the whole game on Heavy Forest (7,379 waits, wood at 1,400
+		// unspent, 15 farmers against Elite's 39). A farm costs wood only, so it goes on now.
+		// WKB_SAVING_ALL=1: the old rule.
+		bool savingShort[3] = { false, false, false };
+		float savingKept[3] = { 0.0f, 0.0f, 0.0f };
+		static const bool savingAll = getenv("WKB_SAVING_ALL") && atoi(getenv("WKB_SAVING_ALL"));
+		// (the rest of its cost kept only once nothing is short: the Black Mass, 800 wood and 200 gold,
+		// waiting for gold at 150 kept 800 wood, and a farm needed 850 wood, which Elinor rarely had)
+		auto saveFor = [&](const float* cost) {
+			saving = true;
+			ServerGameObject* player = this->gameObj;
+			bool shortOf = false;
+			for (int r = 0; r < 3; r++)
+				if (cost[r] > 0.0f && player->getItem(RES_ITEMS[r]) < cost[r]) {
+					savingShort[r] = true;
+					shortOf = true;
+				}
+			if (!shortOf)
+				for (int r = 0; r < 3; r++)
+					savingKept[r] += std::max(0.0f, cost[r]);
+		};
+		auto savingBlocks = [&](const float* cost) {
+			if (!saving)
+				return false;
+			if (savingAll)
+				return true;
+			ServerGameObject* player = this->gameObj;
+			for (int r = 0; r < 3; r++)
+				if (cost[r] > 0.0f && (savingShort[r] || player->getItem(RES_ITEMS[r]) < savingKept[r] + cost[r]))
+					return true;
+			return false;
+		};
 		std::set<size_t> counted; // requirements counted towards completeCount
 		for (const auto& [ri, cap] : passes) {
 			auto& gsreq = gscomm->buildingRequirements[ri];
@@ -1329,7 +1364,7 @@ void AIController::update()
 			size_t requiredCount = std::min(fullCount, cap);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			size_t inCtrCount = reqinst.foundations.size();
-			while (!saving && existingCount + inCtrCount < requiredCount) {
+			while ((!saving || !savingAll) && existingCount + inCtrCount < requiredCount) {
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
 				// no site (the position's finder found nothing): no foundation this time
 				if (posori.position.x == 0.0f && posori.position.z == 0.0f) {
@@ -1361,12 +1396,18 @@ void AIController::update()
 							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str());
 					break;
 				}
+				if (savingBlocks(cost)) {
+					if (tracing)
+						printf("SITES t=%.0f player %u: \"%s\" %s waits: saving for a fighter building\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str());
+					break;
+				}
 				if (!affordOrReserve(cost)) {
 					if (tracing)
 						printf("SITES t=%.0f player %u: \"%s\" %s waits: can't afford it\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
 							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str());
 					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding))
-						saving = true;
+						saveFor(cost);
 					break;
 				}
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);
@@ -1376,7 +1417,7 @@ void AIController::update()
 						foundation ? "laid" : "REFUSED");
 				if (!foundation) {
 					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding) && !obj->getPlayer()->canAffordObject(bpFoundation))
-						saving = true;
+						saveFor(cost);
 					break;
 				}
 				obj->sendEvent(Tags::PDEVENT_ON_COMMISSIONED, foundation);

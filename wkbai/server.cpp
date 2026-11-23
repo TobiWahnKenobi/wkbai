@@ -369,7 +369,7 @@ ServerGameObject* Server::createObject(const GameObjBlueprint * blueprint, uint3
 	return obj;
 }
 
-ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation)
+ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation, ServerGameObject* spawner)
 {
 	if (blueprint->buildingType == Tags::BUILDINGTYPE_RURAL_CENTRE) {
 		ServerGameObject* town = createObject(&gameSet->objBlueprints[Tags::GAMEOBJCLASS_TOWN][0]);
@@ -386,8 +386,15 @@ ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerG
 	// TODO: "On Stampdown" event, etc.
 	if (blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
 		obj->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
-	else if (blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-		obj->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	else if (blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		// a trained one's "On Spawn" comes from its building (the scripts read it as FINDER_PACKAGE_SENDER:
+		// the Monk's "Associate With My Monk Army" joins the monastery's Healing Monk Army, a farm's
+		// "Should I be Farming?"). With no sender no Monk ever joined, the army's commission saw none and
+		// trained three more each time: a Celestial AI had 89 Monks and 1 Spearman at 30 minutes, its gold
+		// gone. WKB_SPAWN_NOSENDER: none, as before.
+		static const bool noSender = getenv("WKB_SPAWN_NOSENDER") != nullptr;
+		obj->sendEvent(Tags::PDEVENT_ON_SPAWN, noSender ? nullptr : spawner);
+	}
 	parent->sendEvent(Tags::PDEVENT_ON_SUBORDINATE_RECEIVED, obj);
 
 	return obj;
