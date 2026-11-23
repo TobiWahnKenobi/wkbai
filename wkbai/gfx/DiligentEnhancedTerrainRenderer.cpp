@@ -312,6 +312,11 @@ cbuffer SunBuffer
 	// the grass in the wind (RenderSettings::grassWind): x 0 off, 1 waves, 2 field; y the gusts'
 	// clock (s, wrapped)
 	float4 WindParams2;
+	// the holes artillery broke in the ice (Terrain::iceHoles, ServerEnvironment::iceStruck): x how
+	// many of IceHoles are in use (the nearest the camera); each x, z (playable world), the open
+	// radius, the widest it was (the new ice thinner out to there)
+	float4 IceHoleInfo;
+	float4 IceHoles[32];
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -556,6 +561,171 @@ float IceShare(float3 world, float sea, float coast)
 	return lerp(fresh, atSea, saturate(sea));
 }
 
+// The holes artillery broke in the ice (IceHoles), as broken ice: the ice ICE_THICK thick, its top
+// at the water's plane, the open water that much below it. The ice lies in plates (IceFloeCell,
+// about ICE_PLATE wide): a plate whose centre is inside the hole (its radius, each plate's
+// own a little more or less) is gone, so the hole's edge runs along the plates' edges, angular;
+// floes (smaller cells) drift in it, low in the water, tilted. Round it, out to 0.45 times the
+// radius and a plate more, the plates are broken off: each sunk and tilted its own way (more so
+// nearer the hole), open water in the cracks between them. While the hole freezes again the
+// plates round it freeze in (back up to the plane, the cracks closed). IceBreakHit marches down
+// the view ray through the ice's thickness, so the eye meets a plate's top, its side (a wall of
+// ice) or the water below. Tops and sides alike are shaded as the rest of the ice (IceOver: its
+// colours, light, mirror and High's screen-space reflections), only darker where wet.
+static const float ICE_THICK = 0.45, ICE_PLATE = 1.8, ICE_OPEN = -10;
+// a plate at p (cell units): its id; twice the distance to its nearest edge (cell units) and its
+// middle (cell units). The cells of a grid laid in brick bond (every other row shifted along by
+// its own amount: joints meeting three ways, as cracks in ice do), turned 30 degrees, bent by two
+// octaves of noise, two cells in three cut in two along a diagonal of their own: uneven three- to
+// five-sided plates, no grid to be seen. No loops (a 3 x 3 cell search inside the ray march had
+// made FXC take 100 s longer over the water's shaders).
+float2 IceFloeCell(float2 p, out float edgeDist, out float2 centre)
+{
+	const float2x2 turn = float2x2(0.866, -0.5, 0.5, 0.866);
+	float2 t = mul(turn, p);
+	float2 w = t + (float2(IceValue(t * 0.43 + 3.1), IceValue(t * 0.43 + float2(7.7, 1.3))) - 0.5) * 1.1
+		+ (float2(IceValue(t * 1.3 + 5.3), IceValue(t * 1.3 + float2(2.9, 9.1))) - 0.5) * 0.35;
+	float row = floor(w.y);
+	uint rh = IceHash(int2((int)row, 977));
+	float shift = (rh & 1023) / 1023.0;
+	w.x += shift;
+	float2 id = floor(w);
+	float2 f = w - id;
+	edgeDist = 2 * min(min(f.x, 1 - f.x), min(f.y, 1 - f.y));
+	float2 mid = float2(0.5, 0.5);
+	uint ch = IceHash((int2)id + int2(401, 73));
+	if ((ch & 3) != 0) {
+		// cut in two: along one diagonal or the other, the line moved a little off the corner
+		float off = (((ch >> 2) & 255) / 255.0 - 0.5) * 0.5;
+		float side = (ch & 4) ? f.x + f.y - 1 - off : f.x - f.y - off;
+		edgeDist = min(edgeDist, abs(side) * 1.414);
+		bool second = side > 0;
+		id = id * 2 + float2(second ? 1 : 0, 0.5);
+		mid = (ch & 4) ? (second ? float2(0.67, 0.67) : float2(0.33, 0.33)) : (second ? float2(0.67, 0.33) : float2(0.33, 0.67));
+	}
+	// (from the id alone, so the same all over the plate: whether it is gone goes by it; the
+	// noise's bend left out, off by at most 0.7)
+	float2 cw = float2(floor(w.x) + mid.x - shift, row + mid.y);
+	centre = mul(cw, turn); // (turned back: the transpose)
+	return id;
+}
+// one hole's ice at a point of the plane: its top's height (0 the ice as it lies, below 0 a sunk
+// plate or a floe, ICE_OPEN the open water) and the plate's slope
+float IceTopOne(float2 p, float4 h, out float2 slope)
+{
+	slope = 0;
+	float big = max(h.z, h.w);
+	if (big <= 0 || distance(p, h.xy) > big * 1.45 + ICE_PLATE * 2)
+		return 0;
+	float gap;
+	float2 centre;
+	float2 cell = IceFloeCell(p / ICE_PLATE, gap, centre);
+	uint hh = IceHash((int2)cell + int2(17, 29));
+	float j1 = (hh & 255) / 255.0, j2 = ((hh >> 8) & 255) / 255.0, j3 = ((hh >> 16) & 255) / 255.0, j4 = (hh >> 24) / 255.0;
+	float2 cw = centre * ICE_PLATE;
+	float dc = distance(cw, h.xy);
+	// the open water: its plates gone
+	float rr = h.z > 0 ? h.z + (j1 - 0.5) * ICE_PLATE * 0.9 : -1;
+	if (dc < rr) {
+		float g2;
+		float2 c2;
+		float2 sub = IceFloeCell(p / 0.8 + 31.7, g2, c2);
+		uint sh = IceHash((int2)sub + int2(5, 811));
+		float k = (sh & 1023) / 1023.0;
+		float edge = saturate(dc / max(rr, 0.5)); // (0 the middle, 1 the edge)
+		if (k < 0.1 + 0.35 * edge && g2 > 0.14) {
+			slope = (float2(((sh >> 10) & 255) / 255.0, ((sh >> 18) & 255) / 255.0) - 0.5) * 0.5;
+			return min(-ICE_THICK * 0.62 + dot(slope, p - (c2 - 31.7) * 0.8), -ICE_THICK * 0.3);
+		}
+		return ICE_OPEN;
+	}
+	// the broken plates round it (frozen in again as the hole closes)
+	float ring = big * 0.45 + ICE_PLATE;
+	float f = saturate(1 - (dc - max(rr, h.w * 0.85)) / ring);
+	float frozenIn = h.z > 0 ? saturate((h.w - h.z) / max(h.w * 0.35, 0.5)) : 1;
+	f *= 1 - frozenIn;
+	if (f <= 0)
+		return 0;
+	if (gap < 0.03 + 0.09 * f)
+		return ICE_OPEN;
+	slope = (float2(j2, j3) - 0.5) * 0.8 * f;
+	return min(-ICE_THICK * f * (0.1 + 0.75 * j4) + dot(slope, p - cw), 0);
+}
+// the ice at a point: the lowest top of the holes near it
+float IceTopAt(float2 p, out float2 slope)
+{
+	float top = 0;
+	slope = 0;
+	int n = (int)IceHoleInfo.x;
+	[loop] for (int i = 0; i < n; i++) {
+		float2 s;
+		float t = IceTopOne(p, IceHoles[i], s);
+		if (t < top) {
+			top = t;
+			slope = s;
+		}
+	}
+	return top;
+}
+bool NearIceHole(float2 xz)
+{
+	int n = (int)IceHoleInfo.x;
+	[loop] for (int i = 0; i < n; i++) {
+		float4 h = IceHoles[i];
+		if (distance(xz, h.xy) < max(h.z, h.w) * 2.2 + 3)
+			return true;
+	}
+	return false;
+}
+// what the eye meets at a point of the water's plane among broken ice (down the view ray through
+// the ice's thickness): x 0 a top (y its depth below the plane), 1 a plate's side (y the depth hit),
+// 2 the open water (y ICE_THICK); slope the plate's
+float2 IceBreakHit(float3 world, out float2 slope)
+{
+	float3 v = normalize(FogCamera.xyz - world);
+	float2 dir = -v.xz / max(v.y, 0.25);
+	float prev = 0;
+	[loop] for (int i = 0; i <= 4; i++) {
+		float d = ICE_THICK * i / 4.0;
+		float t = IceTopAt(world.xz + dir * d, slope);
+		if (t >= -d - 1e-3) {
+			if (i == 0 || -t > prev) // (its top crossed since the last step: a top; else its side)
+				return float2(0, -t);
+			return float2(1, d);
+		}
+		prev = d;
+	}
+	slope = 0;
+	return float2(2, ICE_THICK);
+}
+// beyond the broken plates: y how thin the ice (1: just frozen again, darker and clearer), z the
+// cracks running out from a hole into the ice (to 2.2 times its radius)
+float3 IceHoleAt(float2 xz)
+{
+	float3 r = 0;
+	int n = (int)IceHoleInfo.x;
+	[loop] for (int i = 0; i < n; i++) {
+		float4 h = IceHoles[i];
+		float big = max(h.z, h.w);
+		float dist = distance(xz, h.xy);
+		if (dist > big * 2.2 + 1.5)
+			continue;
+		float rag = (IceValue(xz * 0.8 + h.xy * 0.37) - 0.5) * 0.9;
+		if (h.z > 0) {
+			float2 d = xz - h.xy;
+			float a = atan2(d.y, d.x) / 6.2831853 * 9 + IceValue(xz * 0.35 + h.xy) * 1.6 + h.x * 0.17;
+			// (thin lines where the angle's fraction wraps; their angular width shrinking outwards)
+			float width = clamp(0.12 * max(h.z, 1) / max(dist, 1), 0.02, 0.12);
+			float crackLine = smoothstep(1 - width, 1, abs(frac(a) - 0.5) * 2);
+			float reach = saturate((h.z * 2.2 - dist) / max(h.z * 0.8, 0.5)) * step(h.z * 1.3, dist);
+			r.z = max(r.z, saturate(crackLine) * reach);
+		}
+		// the new ice where it froze again: thinnest at the open water
+		if (h.w > h.z && dist > h.z - 0.3)
+			r.y = max(r.y, saturate((h.w + rag - dist) / max(h.w - max(h.z, 0), 0.3)));
+	}
+	return r;
+}
 
 
 // The unit blob shadows, drawn into a map-sized texture of the light they leave
@@ -1188,12 +1358,43 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	if (share <= 0)
 		return c;
 	float q = WeatherParams3.z;
+	// the holes artillery broke in it (IceBreakHit: broken plates, their sides, the open water
+	// below; IceHoleAt: the new ice thin, cracks beyond)
+	float3 hole = 0;
+	float2 hit = 0, plate = 0;
+	if (IceHoleInfo.x > 0 && NearIceHole(world.xz)) {
+		hole = IceHoleAt(world.xz);
+		hit = IceBreakHit(world, plate);
+	}
+	if (hit.x > 1.5) {
+		// the open water: dark and nearly opaque, as water in ice looks (the water's own
+		// transparency had shown the snowy bed under it, as pale as the ice)
+		float4 open = float4(lerp(c.rgb, GradeColour(float3(0.035, 0.075, 0.10)), 0.65), max(c.a, 0.94));
+		return lerp(c, open, share);
+	}
+	// a plate's side (a wall of clear blue-white ice, darker down towards the water): shaded as the
+	// rest of the ice below, its normal facing the eye (it mirrors the sky and, High, the frame)
+	const bool wallHit = hit.x > 0.5;
+	const float wallDepth = wallHit ? saturate(hit.y / ICE_THICK) : 0;
+	if (wallHit) {
+		float3 toEye = normalize(FogCamera.xyz - world);
+		plate = -normalize(float2(toEye.x, toEye.z) + 1e-4) * 2.5; // (a steep face towards the eye)
+	}
+	// a broken plate's top: the lower, the wetter and darker; lit along its own slope
+	float sunk = wallHit ? 0 : saturate(hit.y / ICE_THICK * 1.6);
+	float3 plateN = normalize(float3(-plate.x, 1, -plate.y));
 	// the snow on it: along the shore (over its first tile or so, a wandering edge) and in drifts
 	float edge = coast + (WeatherNoise(world.xz * 0.21) - 0.5) * 1.2;
 	float onIce = WeatherParams.x * max(smoothstep(1.5, 0.3, edge), saturate((WeatherNoise(world.xz * 0.06 + 7.1) - 0.58) * 3) * 0.7);
+	onIce *= (1 - max(hole.y, hole.z * 0.5)) * (1 - 0.75 * sunk) * (wallHit ? 0 : 1);
+	// the ice's own colour everywhere (its plates' sides, sunk plates and the new ice too), only
+	// darker: wet towards the water line, the new ice thin (the water showing through)
+	const float wet = 1 - 0.45 * max(wallDepth, sunk) - 0.55 * hole.y;
 	if (q < 0.5) {
 		float cracks = WeatherNoise(world.xz * 0.6) * 0.15;
 		float3 ice = lerp(float3(0.80, 0.87, 0.93) - cracks, float3(1.0, 1.02, 1.06), onIce);
+		ice *= wet * (1 - 0.4 * hole.z);
+		ice *= 0.8 + 0.25 * saturate(dot(plateN, normalize(SunDirection))) / max(normalize(SunDirection).y, 0.3);
 		return float4(lerp(c.rgb, GradeColour(ice), share), lerp(c.a, 1, share));
 	}
 	float3 v = normalize(FogCamera.xyz - world);
@@ -1202,7 +1403,7 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	// the surface: the ripple map frozen, at two sizes, gentle
 	float2 s1 = normalTexture.Sample(cloudSampler, world.xz * 0.045).xy - 0.5;
 	float2 s2 = normalTexture.Sample(cloudSampler, world.xz * 0.17 + 0.37).yx - 0.5;
-	float2 slope = (s1 * 0.35 + s2 * 0.18) * near;
+	float2 slope = (s1 * 0.35 + s2 * 0.18) * near - plate;
 	float3 n = normalize(float3(slope.x, 1, slope.y));
 	// what lies in it: cracks and (High) bubbles, a little under the surface
 	float2 inner = world.xz;
@@ -1212,6 +1413,8 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	float crack = (1 - smoothstep(0.0, 0.035, abs(cn - 0.5))) * saturate(1 - dist / 300);
 	float3 albedo = lerp(float3(0.52, 0.64, 0.76), float3(0.70, 0.80, 0.89), WeatherNoise(world.xz * 0.09));
 	albedo *= 1 - 0.35 * crack;
+	// (the new ice of a hole closing: dark, the water showing through; the cracks round a hole)
+	albedo *= wet * (1 - 0.45 * hole.z);
 	if (q > 1.5) {
 		float b = WeatherNoise(inner * 2.7 + 1.9);
 		albedo = lerp(albedo, float3(0.86, 0.92, 0.97), smoothstep(0.82, 0.9, b) * 0.6 * saturate(1 - dist / 120));
@@ -2434,7 +2637,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 960;
+	cbDesc.Size = 960 + 16 + 32 * 16; // (the ice holes from 960)
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -3798,6 +4001,29 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[0] = g_environment.active ? SeaIceReach(g_environment.severity, g_environment.ice) : 0.0f;
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
+	// the holes artillery broke in the ice (IceHoles; the map's terrain has them, the client's from
+	// NETCLIMSG_ICE_HOLES): the 32 nearest the camera
+	{
+		float* info = (float*)(sbdata + 960);
+		float* holes = (float*)(sbdata + 976);
+		std::fill(info, info + 4, 0.0f);
+		const Terrain* src = mapTerrain ? mapTerrain : terrain;		if (g_environment.active && src && src->waterFrozen && !src->iceHoles.empty()) {
+			std::vector<std::pair<float, const Terrain::IceHole*>> near;
+			near.reserve(src->iceHoles.size());
+			const Vector3& cam = camera->position;
+			for (const Terrain::IceHole& h : src->iceHoles)
+				near.push_back({ (h.x - cam.x) * (h.x - cam.x) + (h.z - cam.z) * (h.z - cam.z), &h });
+			const size_t n = std::min<size_t>(near.size(), 32);
+			std::partial_sort(near.begin(), near.begin() + n, near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			for (size_t i = 0; i < n; i++) {
+				holes[4 * i + 0] = near[i].second->x;
+				holes[4 * i + 1] = near[i].second->z;
+				holes[4 * i + 2] = near[i].second->radius;
+				holes[4 * i + 3] = near[i].second->widest;
+			}
+			info[0] = (float)n;
+		}
+	}
 	// the lobby's wind for the grass (WindParams)
 	float* wind2 = (float*)(sbdata + 944);
 	wind2[0] = g_wind.on && g_renderSettings.grass ? (float)std::clamp(g_renderSettings.grassWind, 0, 2) : 0.0f;

@@ -11,6 +11,7 @@
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <set>
 #include <array>
@@ -58,12 +59,43 @@ bool Terrain::frozenAt(int tx, int tz) const
 	if (!waterFrozen || tx < 0 || tz < 0 || tx >= (int)width || tz >= (int)height)
 		return false;
 	const size_t i = (size_t)tz * width + tx;
+	if (!iceOpen.empty() && iceOpen[i])
+		return false; // (a hole broken in it)
 	if (seaTiles.size() != (size_t)width * height || coastTiles.size() != seaTiles.size() || !seaTiles[i])
 		return true;
 	if (seaIceReach <= 0.0f)
 		return false;
 	const float wx = ((float)(tx - (int)edge) + 0.5f) * 5.0f, wz = ((float)(tz - (int)edge) + 0.5f) * 5.0f;
 	return coastTiles[i] / 4.0f + SeaIceEdge(wx, wz, seaIceReach) <= seaIceReach;
+}
+
+bool Terrain::setIceHoles(const std::vector<IceHole>& holes)
+{
+	iceHoles = holes;
+	std::vector<uint8_t> open;
+	bool any = false;
+	for (const IceHole& h : holes) {
+		if (h.radius < ICE_HOLE_MIN)
+			continue;
+		if (!any)
+			open.assign((size_t)width * height, 0);
+		any = true;
+		// (playable world coordinates: tile tx's centre at (tx - edge + 0.5) * 5)
+		const int x0 = (int)std::floor((h.x - h.radius) / 5.0f) + edge, x1 = (int)std::floor((h.x + h.radius) / 5.0f) + edge;
+		const int z0 = (int)std::floor((h.z - h.radius) / 5.0f) + edge, z1 = (int)std::floor((h.z + h.radius) / 5.0f) + edge;
+		const int cx = (int)std::floor(h.x / 5.0f) + edge, cz = (int)std::floor(h.z / 5.0f) + edge;
+		for (int tz = std::max(z0, 0); tz <= std::min(z1, height - 1); tz++)
+			for (int tx = std::max(x0, 0); tx <= std::min(x1, width - 1); tx++) {
+				const float dx = ((float)(tx - edge) + 0.5f) * 5.0f - h.x, dz = ((float)(tz - edge) + 0.5f) * 5.0f - h.z;
+				if ((tx == cx && tz == cz) || dx * dx + dz * dz <= h.radius * h.radius)
+					open[(size_t)tz * width + tx] = 1;
+			}
+	}
+	if (open == iceOpen)
+		return false;
+	iceOpen.swap(open);
+	revision++;
+	return true;
 }
 
 float Terrain::getHeightEx(float x, float z, bool floatOnWater) const

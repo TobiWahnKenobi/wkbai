@@ -151,6 +151,20 @@ struct Terrain
 	float seaIceReach = 0.0f;
 	// whether a tile's water (full tile coordinates) is frozen over
 	bool frozenAt(int tx, int tz) const;
+	// holes in the ice that artillery broke (ServerEnvironment::iceStruck, the server's; the
+	// clients get them by NETCLIMSG_ICE_HOLES): each a disc (playable world coordinates) open
+	// out to radius (refreezing, it shrinks), and the widest it was (the new ice drawn thinner
+	// out to there). A tile whose centre lies inside a hole's radius (and the tile its centre is
+	// on, while it is at least ICE_HOLE_MIN wide) is open water: not frozenAt, so the units
+	// standing on it fall in, the path finding goes round it, boats in it are free.
+	struct IceHole { float x = 0, z = 0, radius = 0, widest = 0; };
+	static constexpr float ICE_HOLE_MIN = 0.6f;
+	std::vector<IceHole> iceHoles;
+	std::vector<uint8_t> iceOpen; // per tile (full coordinates, row order), 1: open; empty: none
+	// the holes set (and the open tiles worked out again); true when the open tiles changed
+	// (then revision is bumped: the path finding's cached tiles are looked at again)
+	bool setIceHoles(const std::vector<IceHole>& holes);
+	bool iceOpenAt(int tx, int tz) const { return !iceOpen.empty() && tx >= 0 && tz >= 0 && tx < width && tz < height && iceOpen[(size_t)tz * width + tx]; }
 
 	Vector3 getNormal(int x, int z) const;
 

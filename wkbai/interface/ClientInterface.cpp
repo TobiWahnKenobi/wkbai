@@ -3662,12 +3662,15 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			if (swimming) {
 				const float surface = SwimSurface(client, obj->position);
 				if (!std::isnan(surface))
-					want = std::clamp(surface - obj->sceneEntity.transform._42, 0.0f, 6.0f);
+					want = std::clamp(surface - obj->sceneEntity.transform._42, 0.0f, 25.0f);
 			}
 			const float now = (float)client->timeManager.currentTime;
 			auto& [lift, last] = it != lifts.end() ? it->second : lifts[obj->id];
 			if (it == lifts.end()) last = now;
-			const float step = std::clamp(now - last, 0.0f, 0.5f) * 1.5f; // (1.5 m a second)
+			// (1.5 m a second; faster the farther off, so one fallen through a hole in the ice into
+			// deep water, its feet on the bed metres down, comes up at once rather than sinking out
+			// of sight: at most 25 m, the deepest lakes')
+			const float step = std::clamp(now - last, 0.0f, 0.5f) * std::max(1.5f, std::abs(want - lift) * 4.0f);
 			last = now;
 			lift = want > lift ? std::min(want, lift + step) : std::max(want, lift - step);
 			obj->sceneEntity.transform._42 += lift;

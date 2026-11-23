@@ -1099,6 +1099,8 @@ void MissileTask::onUpdate()
 		SrvScriptContext ctx(server, go);
 		auto _ = ctx.change(ctx.collisionSubject, hitObject);
 		FlamingMissileLanded(go);
+		// (a heavy shot on a unit out on the ice breaks it there too: ServerEnvironment::iceStruck)
+		server->environment.iceStruck(*server, go, go->position);
 		this->blueprint->collisionTrigger.run(&ctx);
 		return;
 	}
@@ -1119,6 +1121,8 @@ void MissileTask::onUpdate()
 			go->playSpecialEffectAt(go->blueprint->strikeFloorEffect, at);
 		if (!water)
 			FlamingMissileLanded(go);
+		else // (wkbai's: a heavy shot breaks the ice it comes down on, ServerEnvironment::iceStruck)
+			server->environment.iceStruck(*server, go, at);
 		this->blueprint->struckFloorTrigger.run(go);
 	}
 }
