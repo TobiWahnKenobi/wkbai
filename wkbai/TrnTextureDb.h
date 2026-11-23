@@ -9,6 +9,7 @@
 #include <utility>
 #include <map>
 #include <memory>
+#include <array>
 
 struct TerrainTextureGroup;
 struct TerrainTexture;
@@ -30,6 +31,9 @@ struct TerrainTexture
 	std::string file;
 	TerrainTextureGroup *grp;
 	std::vector<TerrainTextureEdge> edges[4];
+	// a generated transition's picture (TransitionGen.h): the base group at each picture corner
+	// (0 (u0, v0), 1 (u1, v0), 2 (u1, v1), 3 (u0, v1)); empty for the game's own
+	std::array<std::string, 4> genCorners;
 };
 
 struct TerrainTextureGroup

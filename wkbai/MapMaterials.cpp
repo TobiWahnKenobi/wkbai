@@ -8,6 +8,7 @@
 #include "file.h"
 #include "tags.h"
 #include "TrnTextureDb.h"
+#include "gfx/bitmap.h"
 #include "util/StriCompare.h"
 #include <stb_image.h>
 // (static, as MapFolder.cpp and MapAuthoring.cpp have their own)
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <map>
 #include <functional>
 #include <queue>
 #include <set>
@@ -201,6 +203,7 @@ namespace {
 		std::map<const TerrainTexture*, std::array<int, 4>> corners; // per picture corner, a base group (-1 unknown)
 		std::unordered_set<uint64_t> compat;        // (rid A, side of A, rid B, B's orientation in A's frame)
 		std::map<std::pair<int, int>, std::array<std::vector<Placed>, 16>> fits; // pair (a < b), world corners that are b -> tiles
+		std::map<std::array<int, 4>, std::vector<Placed>> fits3; // three groups on the world corners -> tiles (generated, TransitionGen.h)
 		std::vector<std::vector<Placed>> pure;      // per base group: its textures in every orientation
 		std::vector<std::vector<int>> next;         // next[a][b]: the next group on the shortest way of transitions from a to b (-1 none)
 		std::vector<std::vector<int>> dist;         // dist[a][b]: transitions on that way (99 none)
@@ -260,6 +263,72 @@ namespace {
 		}
 	};
 
+	// How well two placed pictures meet along a side, by their pixels: the mean RGB difference of
+	// blocks facing each other along it (0-255; 8 blocks, a tenth of a picture deep: the grain
+	// averaged out). The game's EDGE rules leave out pairs that meet well (GRASS1-GRASS4 8 beside 9:
+	// no rule, yet no seam to see; the user's review, 2026-11-23), so an edge without a rule whose
+	// corners agree and whose seam is no rougher than the roughest hundredth of the rule-allowed edges between two
+	// transitions (at least the reviewed 8 beside 9) counts as fitting (MaterialsReport "unmatched".seam). The original pictures (not an HD pack).
+	constexpr float SEAM_REVIEWED_FINE = 22.0f;
+	struct SeamMeter {
+		std::map<std::string, Bitmap> atlases;
+		const Bitmap* atlas(const std::string& file)
+		{
+			auto it = atlases.find(file);
+			if (it == atlases.end()) {
+				const std::string path = "Maps\\Map_Textures\\" + file;
+				Bitmap b;
+				if (FileExists(path.c_str()))
+					b = Bitmap::loadBitmapExact(path.c_str()).convertToR8G8B8A8();
+				it = atlases.emplace(file, std::move(b)).first;
+			}
+			return it->second.width ? &it->second : nullptr;
+		}
+		// world side w (east, north, south, west) of a, b beyond it: the mean RGB difference of the
+		// two pictures' blocks facing each other along it; -1: a picture not readable
+		float measure(const Placed& a, int w, const Placed& b)
+		{
+			static const int SHARED[4][2][2] = { { { 1, 0 }, { 2, 3 } }, { { 2, 1 }, { 3, 0 } }, { { 0, 3 }, { 1, 2 } }, { { 0, 1 }, { 3, 2 } } };
+			static const float UV[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+			const Bitmap* ba = atlas(a.tex->file);
+			const Bitmap* bb = atlas(b.tex->file);
+			if (!ba || !bb) return -1;
+			const Orientations& o = OR();
+			// the picture corners at the side's two world corners, for each
+			const int a0 = o.perm[a.orient][SHARED[w][0][0]], a1 = o.perm[a.orient][SHARED[w][1][0]];
+			const int b0 = o.perm[b.orient][SHARED[w][0][1]], b1 = o.perm[b.orient][SHARED[w][1][1]];
+			// a block's mean colour: along the side from s0 to s1, depth d pixels in from it (the
+			// texture's grain averaged out: what the eye sees as a seam is a step in colour, not noise)
+			auto block = [](const Bitmap& bm, const TerrainTexture& t, int c0, int c1, float s0, float s1, int depth, float out[3]) {
+				const float mu = (UV[c0][0] + UV[c1][0]) / 2, mv = (UV[c0][1] + UV[c1][1]) / 2;
+				const float iu = (0.5f - mu) * 2, iv = (0.5f - mv) * 2; // inwards, one picture across
+				out[0] = out[1] = out[2] = 0;
+				int n = 0;
+				const int along = std::max(2, (int)std::round((s1 - s0) * t.width));
+				for (int i = 0; i < along; i++)
+					for (int d = 0; d < depth; d++) {
+						const float s = s0 + (s1 - s0) * (i + 0.5f) / along, dd = (d + 0.5f) / t.width;
+						const float u = UV[c0][0] + (UV[c1][0] - UV[c0][0]) * s + iu * dd, v = UV[c0][1] + (UV[c1][1] - UV[c0][1]) * s + iv * dd;
+						const int x = std::clamp(t.startx + (int)std::min(u * t.width, t.width - 0.001f), 0, bm.width - 1);
+						const int y = std::clamp(t.starty + (int)std::min(v * t.height, t.height - 0.001f), 0, bm.height - 1);
+						const uint8_t* p = &bm.pixels[((size_t)y * bm.width + x) * 4];
+						for (int c = 0; c < 3; c++) out[c] += p[c];
+						n++;
+					}
+				for (int c = 0; c < 3; c++) out[c] /= std::max(n, 1);
+			};
+			const int SEG = 8, DEPTH = std::max(2, a.tex->width / 10);
+			double sum = 0;
+			for (int i = 0; i < SEG; i++) {
+				float ma[3], mb[3];
+				block(*ba, *a.tex, a0, a1, (float)i / SEG, (float)(i + 1) / SEG, DEPTH, ma);
+				block(*bb, *b.tex, b0, b1, (float)i / SEG, (float)(i + 1) / SEG, DEPTH, mb);
+				for (int c = 0; c < 3; c++) sum += std::abs(ma[c] - mb[c]);
+			}
+			return (float)(sum / (3.0 * SEG));
+		}
+	};
+
 	bool IsTransitionName(const std::string& n, std::string& a, std::string& b)
 	{
 		size_t d = n.find('-');
@@ -308,7 +377,8 @@ namespace {
 		for (const auto& [name, g] : db.groups)
 			if (g)
 				for (const auto& [id, t] : g->textures)
-					L.rid[t.get()] = ridFor(name, id);
+					if (t->genCorners[0].empty()) // (a generated picture has no rules: it fits any neighbour)
+						L.rid[t.get()] = ridFor(name, id);
 		for (const auto& [group, byTex] : er.rules)
 			for (const auto& [id, list] : byTex) {
 				const int ra = ridFor(group, id);
@@ -340,7 +410,7 @@ namespace {
 			if (!g || !IsTransitionName(name, an, bn) || !L.groupIndex.count(an) || !L.groupIndex.count(bn))
 				continue;
 			for (const auto& [id, t] : g->textures)
-				if (!isMatching(name, id)) // the TEXTUREs: a MATCHING one shares its rules and corners
+				if (!isMatching(name, id) && t->genCorners[0].empty()) // the TEXTUREs: a MATCHING one shares its rules and corners (a generated one has neither)
 					transitions.push_back({ L.rid[t.get()], L.groupIndex[an], L.groupIndex[bn], name, id });
 		}
 		for (int pass = 0; pass < 4; pass++) {
@@ -389,13 +459,35 @@ namespace {
 		}
 		// the solver's tables
 		L.pure.resize(L.groups.size());
+		// the game's pictures first, then the generated ones: a generated picture of a pair the game
+		// has (TransitionGen.h, "<A>-<B>_GEN") is taken only for a corner pattern no game picture has
+		for (int generated = 0; generated < 2; generated++)
 		for (const auto& [name, g] : db.groups)
 			for (const auto& [id, t] : g->textures) {
-				auto c = ridCorners.find(L.rid[t.get()]);
-				if (c == ridCorners.end())
+				if (t->genCorners[0].empty() == (generated == 1))
 					continue;
-				L.corners[t.get()] = c->second;
-				const std::array<int, 4>& cc = c->second;
+				std::array<int, 4> gen;
+				const std::array<int, 4>* found = nullptr;
+				if (!t->genCorners[0].empty()) {
+					// a generated transition (TransitionGen.h): its corners as it was made
+					bool ok = true;
+					for (int k = 0; k < 4; k++) {
+						auto gi = L.groupIndex.find(t->genCorners[k]);
+						ok = ok && gi != L.groupIndex.end();
+						gen[k] = ok ? gi->second : -1;
+					}
+					if (!ok)
+						continue;
+					found = &gen;
+				}
+				else {
+					auto c = ridCorners.find(L.rid[t.get()]);
+					if (c == ridCorners.end())
+						continue;
+					found = &c->second;
+				}
+				L.corners[t.get()] = *found;
+				const std::array<int, 4>& cc = *found;
 				if (cc[0] == cc[1] && cc[1] == cc[2] && cc[2] == cc[3]) {
 					if (L.baseOf.count(g.get()))
 						for (int k = 0; k < 8; k++)
@@ -406,15 +498,25 @@ namespace {
 				bool two = true;
 				for (int k = 0; k < 4; k++)
 					two = two && (cc[k] == lo || cc[k] == hi);
-				if (!two)
+				if (!two) {
+					// three groups (a generated picture): keyed by the corners as placed, each orientation
+					for (int k = 0; k < 8; k++) {
+						std::array<int, 4> w;
+						for (int i = 0; i < 4; i++) w[i] = cc[o.perm[k][i]];
+						L.fits3[w].push_back({ t.get(), (uint8_t)k });
+					}
 					continue;
+				}
 				auto& table = L.fits[{ lo, hi }];
 				for (int k = 0; k < 8; k++) {
 					int bits = 0;
 					for (int i = 0; i < 4; i++)
 						if (cc[o.perm[k][i]] == hi)
 							bits |= 1 << i;
-					table[bits].push_back({ t.get(), (uint8_t)k });
+					auto& list = table[bits];
+					if (generated && std::any_of(list.begin(), list.end(), [](const Placed& p) { return p.tex->genCorners[0].empty(); }))
+						continue; // the game has this pattern
+					list.push_back({ t.get(), (uint8_t)k });
 				}
 			}
 		L.ways({});
@@ -1166,7 +1268,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	auto patternOk = [&](const std::array<int, 4>& c) {
 		const int a = *std::min_element(c.begin(), c.end()), b = *std::max_element(c.begin(), c.end());
 		if (a == b) return !L.pure[a].empty();
-		for (int k = 0; k < 4; k++) if (c[k] != a && c[k] != b) return false;
+		for (int k = 0; k < 4; k++) if (c[k] != a && c[k] != b) return L.fits3.count(c) != 0;
 		auto it = L.fits.find({ a, b });
 		if (it == L.fits.end()) return false;
 		int bits = 0;
@@ -1628,6 +1730,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 			for (int k = 0; k < 4; k++) c[k] = vg[vi[k]];
 			const int a = *std::min_element(c.begin(), c.end()), b = *std::max_element(c.begin(), c.end());
 			if (a == b && !L.pure[a].empty()) { cand[ti] = &L.pure[a]; continue; }
+			if (auto f3 = L.fits3.find(c); f3 != L.fits3.end()) { cand[ti] = &f3->second; continue; }
 			if (patternOk(c)) {
 				int bits = 0;
 				for (int k = 0; k < 4; k++) if (c[k] == b) bits |= 1 << k;
@@ -1767,9 +1870,44 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 			if (tile.texture && tile.texture->grp)
 				groupTiles[tile.texture->grp->name]++;
 		}
-	// the edges that still don't fit
-	int edgeBad = 0, edgeBadHand = 0;
-	std::map<std::string, int> badPairs;
+	// the edges that still don't fit by the rules: those that meet as well as the rule-allowed edges
+	// do (by their pixels, SeamMeter) and whose shared corners agree are taken; the rest reported
+	SeamMeter seams;
+	float seamLimit = -1, seamAllowedMedian = -1, seamAllowedP99 = -1, seamAllMedian = -1;
+	{
+		// the rule-allowed edges between two of the game's pictures (every 3rd, enough for the spread)
+		std::vector<float> ok, all; // between two transitions; any two
+		long k = 0;
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++)
+				for (int w : { 0, 1 }) {
+					const int nx = x + DX[w], nz = z + DZ[w];
+					if (nx >= W || nz >= H || k++ % 3) continue;
+					const size_t a = (size_t)z * W + x, b = (size_t)nz * W + nx;
+					if (!cur[a].tex || !cur[b].tex || !L.rid.count(cur[a].tex) || !L.rid.count(cur[b].tex) || !L.fit(cur[a], w, cur[b])) continue;
+					const float m = seams.measure(cur[a], w, cur[b]);
+					if (m < 0) continue;
+					all.push_back(m);
+					// (a transition's soft edge is rougher than grass beside grass: the measure for an
+					// edge between two transitions is the allowed edges between two transitions)
+					auto pure = [&](const TerrainTexture* t) { auto c = L.corners.find(t); return c == L.corners.end() || (c->second[0] == c->second[1] && c->second[1] == c->second[2] && c->second[2] == c->second[3]); };
+					if (!pure(cur[a].tex) && !pure(cur[b].tex)) ok.push_back(m);
+				}
+		std::sort(ok.begin(), ok.end());
+		std::sort(all.begin(), all.end());
+		if (ok.size() < 100) ok = all;
+		if (ok.size() >= 100) {
+			seamAllowedMedian = ok[ok.size() / 2];
+			seamAllowedP99 = ok[ok.size() * 99 / 100];
+			// as rough as the roughest hundredth the rules allow, and never below the GRASS1-GRASS4 8 beside
+			// 9 seams (17-22) the user reviewed as fine in-game (2026-11-23)
+			seamLimit = std::max(seamAllowedP99, SEAM_REVIEWED_FINE);
+		}
+		if (!all.empty()) seamAllMedian = all[all.size() / 2];
+	}
+	int edgeBad = 0, edgeBadHand = 0, edgeBySeam = 0;
+	std::map<std::string, int> badPairs, seamPairs;
+	double seamSum = 0;
 	for (int z = 0; z < H; z++)
 		for (int x = 0; x < W; x++)
 			for (int w : { 0, 1 }) {
@@ -1778,16 +1916,33 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 				const size_t a = (size_t)z * W + x, b = (size_t)nz * W + nx;
 				if (!cur[a].tex || !cur[b].tex || L.fit(cur[a], w, cur[b])) continue;
 				if (hand[a] && hand[b]) { edgeBadHand++; continue; }
+				std::string seamNote;
+				if (seamLimit >= 0) {
+					const std::array<int, 4> ca = L.worldCorners(cur[a]), cb = L.worldCorners(cur[b]);
+					const int S[2][2][2] = { { { 1, 0 }, { 2, 3 } }, { { 2, 1 }, { 3, 0 } } };
+					bool agree = true;
+					for (int q = 0; q < 2; q++) agree = agree && ca[S[w][q][0]] >= 0 && ca[S[w][q][0]] == cb[S[w][q][1]];
+					const float m = agree ? seams.measure(cur[a], w, cur[b]) : -1;
+					if (m >= 0 && m <= seamLimit) {
+						edgeBySeam++;
+						seamSum += m;
+						std::string ga = cur[a].tex->grp->name + " " + std::to_string(cur[a].tex->id), gb = cur[b].tex->grp->name + " " + std::to_string(cur[b].tex->id);
+						if (gb < ga) std::swap(ga, gb);
+						seamPairs[ga + " | " + gb]++;
+						continue;
+					}
+					char buf[64];
+					if (m >= 0) snprintf(buf, sizeof(buf), "; seam %.1f (limit %.1f)", m, seamLimit);
+					seamNote = m >= 0 ? buf : agree ? "" : "; their corners differ";
+				}
 				edgeBad++;
 				{
 					std::string ga = cur[a].tex->grp->name, gb = cur[b].tex->grp->name;
 					if (gb < ga) std::swap(ga, gb);
 					badPairs[ga + " | " + gb]++;
 				}
-				const int ca = (int)(L.corners.count(cur[a].tex) ? 1 : 0);
-				(void)ca;
 				unmatched.push_back({ x, z, "edge", std::string(SIDE_NAMES[w]) + " side: " + cur[a].tex->grp->name + " " + std::to_string(cur[a].tex->id) + " next to "
-					+ cur[b].tex->grp->name + " " + std::to_string(cur[b].tex->id) + ": no EDGE rule allows them in these turns" + (hand[a] || hand[b] ? " (beside a hand tile)" : "") });
+					+ cur[b].tex->grp->name + " " + std::to_string(cur[b].tex->id) + ": no EDGE rule allows them in these turns" + seamNote + (hand[a] || hand[b] ? " (beside a hand tile)" : "") });
 			}
 	const auto tSolve = clock::now();
 	MapFolder::ReportProgress("the ground: the report", 0.88f);
@@ -1876,8 +2031,17 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		std::sort(v.begin(), v.end());
 		for (size_t i = 0; i < v.size() && i < 20; i++) bp.push_back({ { "groups", v[i].second }, { "edges", -v[i].first } });
 	}
+	json sp = json::array();
+	{
+		std::vector<std::pair<int, std::string>> v;
+		for (auto& [k, n] : seamPairs) v.push_back({ -n, k });
+		std::sort(v.begin(), v.end());
+		for (size_t i = 0; i < v.size() && i < 20; i++) sp.push_back({ { "pictures", v[i].second }, { "edges", -v[i].first } });
+	}
+	const json seamJ = { { "edges", edgeBySeam }, { "limit", std::round(seamLimit * 10) / 10 }, { "mean", edgeBySeam ? std::round(seamSum / edgeBySeam * 10) / 10 : 0.0 },
+		{ "allowedMedian", std::round(seamAllowedMedian * 10) / 10 }, { "allowedP99", std::round(seamAllowedP99 * 10) / 10 }, { "anyAllowedMedian", std::round(seamAllMedian * 10) / 10 }, { "byPictures", sp }, { "about", "edges no EDGE rule allows, taken because their shared corners agree and their seam (the mean RGB difference of 8 blocks along each side, 6 pixels deep, 0-255) is no worse than limit: the 99th percentile of the rule-allowed edges between two transition pictures on this map (all rule-allowed edges when fewer than 100), at least 22 (GRASS1-GRASS4 8 beside 9, reviewed in-game as no visible seam); not counted as unmatched. allowedMedian: those edges' median; anyAllowedMedian: every rule-allowed edge's (mostly one ground beside itself)" } };
 	mr["unmatched"] = { { "count", unmatched.size() }, { "edgesByGroups", bp }, { "corners", unmatchedCorners }, { "edges", edgeBad }, { "betweenHandTiles", edgeBadHand },
-		{ "handCornerConflicts", handFixedConflicts }, { "list", um },
+		{ "handCornerConflicts", handFixedConflicts }, { "seam", seamJ }, { "list", um },
 		{ "about", "tile [x, z] counts from the whole map's south-west corner, edge band included; atM is the tile's middle in playable metres. corners: no picture joins the tile's corners' groups (a fallback was used); edges: two neighbours' pictures have no EDGE rule for their turns. Edges between two hand tiles are counted apart, not listed" } };
 	{
 		std::vector<float> m;

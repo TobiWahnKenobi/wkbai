@@ -2248,6 +2248,67 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		for (size_t i = 1; i < n; i++) steepest = std::max(steepest, (sm[i - 1] - sm[i]) / 5.0f);
 		r["waterSteepest"] = std::round(steepest * 1000) / 1000;
 	}
+	// Banks for the water where the land beside a river lies lower than its surface (a coastal
+	// flat, its bed held above the sea; a slope across the course; the surface may stand 0.3 m over
+	// the lower bank above): the land beside the channel raised into a low levee that rises from the
+	// water's edge at the channel's half width at 1 in 16 and falls back the same way (no higher
+	// than 0.5 m over the water; no vertex raised more than 0.75 m). The water then ends on ground that rises with the distance from
+	// the course, along the course's own curve; it had ended where its band of tiles did, in steps
+	// of the tile grid (the user's shot, Snowdonia 2026-11-23). Only ever raises; never land under a
+	// lake or the sea, nor within any river's channel (each vertex goes by the nearest course).
+	json riverBanksJ;
+	if (!wetWays.empty()) {
+		const float K = 1.0f / 16.0f, R = 8.0f;
+		const int gw = m.gw(), gh = m.gh();
+		std::vector<float> nd((size_t)gw * gh, 1e30f), ns((size_t)gw * gh, 0.0f), nh((size_t)gw * gh, 0.0f);
+		std::vector<uint8_t> onLakeStretch((size_t)gw * gh, 0);
+		for (const WetWay& ww : wetWays) {
+			const float hw = std::max(ww.width * 0.5f, 5.0f) + 1.0f, reach = hw + 2 * R + 12.0f;
+			const WetRiver* wr = nullptr;
+			for (const WetRiver& w : wet) if (w.f == ww.f) wr = &w;
+			for (size_t i = 0; i + 1 < ww.c.size(); i++) {
+				const V2 a = ww.c[i], ab = ww.c[i + 1] - a;
+				const bool lakeHere = wr && i < wr->lakeAt.size() && wr->lakeAt[i] > -1e29f;
+				const int x0 = std::max(0, (int)m.vx(std::min(a.x, ww.c[i + 1].x) - reach)), x1 = std::min(gw - 1, (int)m.vx(std::max(a.x, ww.c[i + 1].x) + reach) + 1);
+				const int z0 = std::max(0, (int)m.vz(std::min(a.z, ww.c[i + 1].z) - reach)), z1 = std::min(gh - 1, (int)m.vz(std::max(a.z, ww.c[i + 1].z) + reach) + 1);
+				for (int z = z0; z <= z1; z++)
+					for (int x = x0; x <= x1; x++) {
+						const V2 p = m.pos(x, z);
+						const float t = std::clamp(Dot(p - a, ab) / std::max(Dot(ab, ab), 1e-9f), 0.0f, 1.0f);
+						const float d = Len(p - (a + ab * t));
+						const size_t k = (size_t)z * gw + x;
+						if (d < nd[k]) {
+							nd[k] = d;
+							ns[k] = Lerp(ww.level[i], ww.level[i + 1], t);
+							nh[k] = hw;
+							onLakeStretch[k] = lakeHere;
+						}
+					}
+			}
+		}
+		int raised = 0, tooLow = 0;
+		float most = 0;
+		for (int z = 0; z < gh; z++)
+			for (int x = 0; x < gw; x++) {
+				const size_t k = (size_t)z * gw + x;
+				if (nd[k] > 1e29f || onLakeStretch[k]) continue;
+				if (!lakeOn.empty() && lakeOn[k] > -1e29f) continue;
+				if (hasSea && g.v[k] <= sea + 0.01f) continue;
+				const float e = nd[k] - nh[k];
+				if (e <= 0) continue;
+				const float levee = ns[k] + std::min(K * e, K * (2 * R - e));
+				if (levee <= g.v[k]) continue;
+				// (a raise of more than 0.75 m: land falling away beside the river, not a flat it
+				// stands over; left as it is, else a dyke metres high: 4.9 m on Snowdonia)
+				if (levee - g.v[k] > 0.75f) { tooLow++; continue; }
+				most = std::max(most, levee - g.v[k]);
+				g.v[k] = levee;
+				raised++;
+			}
+		riverBanksJ = { { "verticesRaised", raised }, { "mostM", std::round(most * 100) / 100 }, { "leftLow", tooLow },
+			{ "about", "land beside a river lower than its water raised into a low levee (1 in 16 from the channel's half width, at most 0.5 m over the water, at most 0.75 m raised: leftLow, land lower than that, left as it is), so the water ends along the course rather than on the tile grid" } };
+		if (raised) printf("Terrain: river banks raised over the water at %d vertices (at most %.2f m)\n", raised, most);
+	}
 	timing["details"] = Ms(t1);
 
 	// no land below 0 (the format's heights start there): everything raised, the sea too
@@ -2312,6 +2373,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	gen["seaLevel"] = hasSea ? json(sea) : json();
 	gen["raisedByM"] = raisedBy;
 	if (lakeRimsMended) gen["lakeRimsKept"] = lakeRimsMended;
+	if (!riverBanksJ.is_null()) gen["riverBanks"] = riverBanksJ;
 	for (json& rv : riversGen)
 		for (json& pt : rv["course"])
 			pt[2] = pt[2].get<float>() + raisedBy;
