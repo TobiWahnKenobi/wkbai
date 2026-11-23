@@ -1802,6 +1802,11 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
+		{
+			// (where an override pack has <texture>_height maps; costly: the ground fills the screen)
+			static const char* const pomLevels[] = { "Off", "Low", "Medium", "High" };
+			ImGui::Combo("Parallax occlusion mapping (terrain)", &s.pomTerrain, pomLevels, 4);
+		}
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
 		{
@@ -1828,6 +1833,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Reflections on buildings and units", &s.modelReflections, reflLevels, 3);
 		}
 		ImGui::SliderFloat("Model detail from textures", &s.modelDetailNormals, 0.0f, 8.0f, "%.1f");
+		{
+			static const char* const pomLevels[] = { "Off", "Low", "High" };
+			ImGui::Combo("Parallax occlusion mapping (models)", &s.pomModels, pomLevels, 3);
+		}
 		ImGui::Checkbox("Sky light on models", &s.skyLight);
 		ImGui::EndDisabled();
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");

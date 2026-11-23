@@ -381,6 +381,26 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("bumpMapping", "terrain", "Terrain bump mapping", rs.bumpMapping));
+		{
+			// parallax occlusion mapping where an override pack has height maps (RenderSettings::
+			// pomTerrain, pomModels): two settings, the ground's costs much more
+			MenuOption o;
+			o.id = "pomTerrain"; o.page = "terrain"; o.label = "Parallax occlusion mapping (terrain)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.pomTerrain; };
+			o.set = [&rs](float v) { rs.pomTerrain = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "pomModels"; o.page = "models"; o.label = "Parallax occlusion mapping (models)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "High" };
+			o.get = [&rs]() { return (float)rs.pomModels; };
+			o.set = [&rs](float v) { rs.pomModels = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.modelLighting; }));
+		}
 		list.push_back(toggle("modelLighting", "models", "Model highlights", rs.modelLighting));
 		{
 			// the reflections on buildings and units (RenderSettings::modelReflections): need the

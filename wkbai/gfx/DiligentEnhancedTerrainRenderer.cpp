@@ -40,6 +40,18 @@ using namespace Diligent;
 static const char tshaderCode[] = R"---(
 Texture2D inpTexture;
 Texture2D normalTexture;
+// override packs (docs/engine/terrain-pbr.md in the RE repository): <atlas>_orm (occlusion,
+// roughness, metalness), else 1, 0.65, 0; <atlas>_height (the relief for parallax occlusion
+// mapping: 1 the surface, 0 TerrainPom.w below), else a 1 x 1 white (no relief)
+Texture2D ormTexture;
+Texture2D reliefTexture;
+// the tile texture's maps: x 1 its normal map is an override pack's (tangent space, +z out:
+// x along u, y along v), 0 the shader's own layout (x along u, y up, z along v); y 1 it has a
+// height map; z 1 an ORM map (the PBR terms; without, the ground is lit as before)
+cbuffer TerrainMaterial
+{
+	float4 TerrainMat;
+};
 SamplerState inpSampler;
 Texture2D cloudTexture;
 SamplerState cloudSampler;
@@ -312,6 +324,10 @@ cbuffer SunBuffer
 	// the grass in the wind (RenderSettings::grassWind): x 0 off, 1 waves, 2 field; y the gusts'
 	// clock (s, wrapped)
 	float4 WindParams2;
+	// the ground's parallax occlusion mapping (RenderSettings::pomTerrain): the view ray's most
+	// steps (0: off) and fewest (seen from straight above), the sun ray's steps (0: no relief
+	// shadows), how deep a height map's 0 lies (world units)
+	float4 TerrainPom;
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -1805,6 +1821,50 @@ float3 TerrainFresnel(float3 c, float3 pos, float3 n, float vis)
 	return lerp(c, sky * vis, f);
 }
 
+// The tile's material terms in this pixel (PS): its ORM map's occlusion, roughness and
+// metalness (TerrainPbr 1 with one: without, the ground is lit as before), the parallax relief's
+// shadow on the sun's light
+static float3 TerrainOrm = float3(1, 0.65, 0);
+static float TerrainPbr = 0;
+static float TerrainPomShadow = 1;
+
+// The sun's highlight off the ground with an ORM map, as on the models (GGX, Schlick's Fresnel,
+// Smith's visibility): n the surface, v towards the eye, f0 its reflectance
+float3 TerrainSpecular(float3 n, float3 v, float roughness, float3 f0)
+{
+	const float3 l = normalize(SunDirection);
+	const float3 h = normalize(l + v);
+	const float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3), nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
+	const float a = roughness * roughness, a2 = a * a;
+	const float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
+	const float k = a / 2;
+	const float gvis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
+	const float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
+	return d * gvis * f * nl / 4;
+}
+
+// The ground with an ORM map, as the models' ModelLight puts it together: light the light on
+// the point (sun, sky, bounce; no albedo), sunVis how much of the sun reaches it (for the
+// highlight), vis how much it sees of the sky. A metal's reflectance its albedo's hue (at least
+// 0.62 bright, as the models'); the sky's reflection by the roughness: a smooth surface mirrors
+// the sky along the reflected view, a rough one the light its hemisphere gets.
+float3 TerrainPbrLight(float3 light, float3 albedo, float3 pos, float3 n, float sunVis, float vis)
+{
+	const float roughness = clamp(TerrainOrm.g, 0.05, 1), metal = TerrainOrm.b, a = roughness * roughness;
+	const float3 v = normalize(FogCamera.xyz - pos);
+	const float nv = max(dot(n, v), 1e-3);
+	const float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+	const float3 metalF0 = saturate(albedo * clamp(0.62 / max(lum, 1e-3), 1, 6));
+	const float3 f0 = lerp((0.04).xxx, metalF0, metal);
+	const float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
+	const float3 r = reflect(-v, n);
+	const float3 rd = normalize(lerp(r, n, a) + n * 1e-3);
+	const float3 sky = FogSky[48].w != 0 ? SkyReflect(rd) : lerp(CloudSkyHorizon.rgb, CloudSkyUp.rgb, saturate(rd.y));
+	const float blur = saturate(a * 1.6);
+	const float3 reflected = lerp(sky * vis * TerrainOrm.r, light, blur);
+	return light * albedo * (1 - metal) * (1 - fv) + 1.05 * TerrainSpecular(n, v, roughness, f0) * sunVis + reflected * fv;
+}
+
 // The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the
 // per-vertex light vector (the sun direction in tangent space, shortened by the cloud
 // shadows) dotted with the normal map, clamped, times the texture.
@@ -1846,13 +1906,21 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		float share = SkyOccLight.x;
 		// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on
 		// the sky's and the bounce
-		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob * RtSunMask(input.Pos)
-			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n);
+		// (the parallax relief's own shadow on the sun's, the ORM map's occlusion on the sky's and
+		// the bounce: 1 without them)
+		const float sunVis = CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob * RtSunMask(input.Pos) * TerrainPomShadow;
+		float3 l3 = (1 - share) * 1.05 * sunLight * sunVis
+			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) * TerrainOrm.r + FireLight(input.FragPos, n);
 		float4 lc = float4(l3, 1) * input.Color * tex;
+		// an ORM map: the models' PBR terms in place of the plain Fresnel (the light already holds
+		// the occlusion; the sun's highlight under the same shadows as its light)
+		if (TerrainPbr != 0)
+			lc.rgb = TerrainPbrLight(l3 * input.Color.rgb, tex.rgb, input.FragPos, normalize(wn), (1 - share) * sunVis, vis * AoMask(input.Pos));
 		// Ultra's lamps and windows (DirectWindowLight): direct light, past the occlusion
 		if (GIRegion.w != 0)
-			lc.rgb += CastLightOn(input.Color.rgb * tex.rgb, DirectWindowLight(input.FragPos, n));
-		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
+			lc.rgb += CastLightOn(input.Color.rgb * tex.rgb * (1 - TerrainOrm.b * TerrainPbr), DirectWindowLight(input.FragPos, n));
+		if (TerrainPbr == 0)
+			lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
 		lc.rgb += SnowGlint(input.FragPos, n) * GlintTint() * CloudLight(input.FragPos) * RtSunMask(input.Pos) * lerp(SkyOccLight.z, 1, lit) * FarShadow;
 		float4 gc = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 		return float4(GradeColour(gc.rgb), gc.a);
@@ -1887,10 +1955,22 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		lum += clamp(dot(vertexNormal, SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
 	}
-	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * AoMask(input.Pos);
-	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
+	const float sunVis = CloudLight(input.FragPos) * StaticShadowLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * AoMask(input.Pos)
+		* BlobLight(input.FragPos) * TerrainPomShadow;
+	lum *= sunVis;
+	float3 light = (lum * TerrainOrm.r).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 lc = float4(light, 1) * input.Color * tex;
-	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
+	if (TerrainPbr != 0) {
+		float3 n = normalize(input.Norm);
+		if (BumpOn & 1) {
+			float3 t = normalize(tangent - n * dot(tangent, n));
+			float3 b = normalize(bitangent - n * dot(bitangent, n) - t * dot(bitangent, t));
+			n = normalize(nrm.x * t + nrm.y * n + nrm.z * b);
+		}
+		lc.rgb = TerrainPbrLight(light * input.Color.rgb, tex.rgb, input.FragPos, n, sunVis, 1);
+	}
+	else
+		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
 	lc.rgb += SnowGlint(input.FragPos, normalize(input.Norm)) * GlintTint() * CloudLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * FarShadow;
 	float4 c = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
@@ -1912,12 +1992,105 @@ float2 AtlasUV(float2 texcoord)
 	return clamp(subuv, float2(ha,ha), float2(0.25-ha,0.25-ha)) + tile*0.25;
 }
 
+// The ground's parallax occlusion mapping (RenderSettings::pomTerrain, tiles with a height map),
+// as the models' PrepareSurface: the relief is metric (the UV's world gradients from the screen
+// derivatives, so the atlas cell's turn and flips come with them); the view ray steps down until
+// it meets the relief, refined between the last two steps; from there a ray towards the sun
+// finds whether relief above shades the point (TerrainPomShadow). The ray stays inside the
+// tile's own 64-texel cell of the atlas (clamped half a texel of the mip in): it never reads the
+// neighbouring cells' pictures. Skipped where the relief is under a third of a pixel deep.
+float PomGroundDepth(float2 uv, float2 dx, float2 dy)
+{
+	return (1 - reliefTexture.SampleGrad(inpSampler, uv, dx, dy).r) * TerrainPom.w;
+}
+
+float2 TerrainParallax(VS_OUTPUT input, float2 uv, float2 dx, float2 dy)
+{
+	const float range = TerrainPom.w;
+	float3 n = normalize(input.Norm);
+	float3 dp1 = ddx(input.FragPos), dp2 = ddy(input.FragPos);
+	if (range < max(length(dp1), length(dp2)) * 0.33)
+		return uv;
+	float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+	float det = dot(dp1, dp2perp);
+	if (abs(det) < 1e-14)
+		return uv;
+	float3 gu = (dp2perp * dx.x + dp1perp * dy.x) / det; // du per world unit
+	float3 gv = (dp2perp * dx.y + dp1perp * dy.y) / det;
+	// the cell's bounds, half a texel of the mip in (as AtlasUV)
+	float lod = reliefTexture.CalculateLevelOfDetail(inpSampler, uv);
+	uint aw, ah, levels;
+	reliefTexture.GetDimensions(0, aw, ah, levels);
+	const float ha = 0.5 / max(aw >> (int)ceil(max(lod, 0)), 1u);
+	const float2 lo = floor(saturate(uv) * 4 - 1e-4) * 0.25 + ha, hi = lo - 2 * ha + 0.25;
+	float3 e = normalize(input.FragPos - FogCamera.xyz);
+	float en = max(-dot(e, n), 0.15);
+	float3 lat = (e + n * en) / en;
+	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
+	const int steps = max((int)lerp(TerrainPom.x, TerrainPom.y, en), 1);
+	const float stepDepth = range / steps;
+	float2 start = uv;
+	float d = 0;
+	float gap = PomGroundDepth(uv, dx, dy);
+	[loop] for (int i = 1; i <= steps && gap > 0; i++) {
+		float nd = stepDepth * i;
+		float2 nuv = clamp(start + uvPerDepth * nd, lo, hi);
+		float ngap = PomGroundDepth(nuv, dx, dy) - nd;
+		if (ngap <= 0) {
+			float t = gap / (gap - ngap);
+			uv = lerp(uv, nuv, t);
+			d = lerp(d, nd, t);
+			gap = 0;
+			break;
+		}
+		uv = nuv; d = nd; gap = ngap;
+	}
+	float3 l = normalize(SunDirection);
+	float ln = dot(l, n);
+	const int sh = (int)TerrainPom.z;
+	if (sh > 0 && ln > 0.02 && d > 1e-4) {
+		float3 latl = (l - n * ln) / ln;
+		float2 uvPerRise = float2(dot(gu, latl), dot(gv, latl));
+		float occl = 0;
+		[loop] for (int j = 1; j <= sh; j++) {
+			float rise = d * j / sh;
+			float above = (d - rise) - PomGroundDepth(clamp(uv + uvPerRise * rise, lo, hi), dx, dy);
+			occl = max(occl, saturate(above / range * 6 * (1 - (float)j / (sh + 1))));
+		}
+		TerrainPomShadow = 1 - occl;
+	}
+	return uv;
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	FarShadow = NearFarShadow(input.FragPos);
 	float2 fuv = AtlasUV(input.Texcoord);
-	float4 tex = inpTexture.Sample(inpSampler, fuv);
-	float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
+	float4 tex, ns;
+	if (TerrainMat.y != 0 && TerrainPom.x > 0) {
+		// (the triangle's own UV derivatives: the relief's steps make no seams in the mips)
+		const float2 dx = ddx(input.Texcoord), dy = ddy(input.Texcoord);
+		fuv = TerrainParallax(input, fuv, dx, dy);
+		tex = inpTexture.SampleGrad(inpSampler, fuv, dx, dy);
+		ns = normalTexture.SampleGrad(inpSampler, fuv, dx, dy);
+		if (TerrainMat.z != 0)
+			TerrainOrm = ormTexture.SampleGrad(inpSampler, fuv, dx, dy).rgb;
+	}
+	else {
+		tex = inpTexture.Sample(inpSampler, fuv);
+		ns = normalTexture.Sample(inpSampler, fuv);
+		if (TerrainMat.z != 0)
+			TerrainOrm = ormTexture.Sample(inpSampler, fuv).rgb;
+	}
+	TerrainPbr = TerrainMat.z;
+	float3 nrm = ns.xyz * 2 - 1;
+	// an override pack's normal map (+z out; z from x and y, as a BC5 map has only those) into
+	// the shader's layout (x along u, y up, z along v): the tile's tangent and bitangent follow
+	// its cell's turn and flips (BuildEnhancedTerrainVertices)
+	if (TerrainMat.x != 0) {
+		nrm.z = sqrt(saturate(1 - dot(nrm.xy, nrm.xy)));
+		nrm = nrm.xzy;
+	}
 	// Extend map: over the near ring's last part its tiles' pictures give way to their mean
 	// colours (the atlas' 4 x 4 mip, a texel per tile) and flat normals, as the far rings beyond
 	// show them (the textured ground had stopped short against the plain one, the play test of
@@ -2050,9 +2223,19 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> sunBuffer;
 	RefCntAutoPtr<IBuffer> trnVertexBuffer;
 
-	using TexturePair = std::pair<texture, texture>; // diffuse, normal map
+	// a tile texture's maps: diffuse, normal map, and the override pack's ORM and height maps
+	// (nullptr: the defaults below), the normal map's layout (native: +z out)
+	struct TexturePair {
+		texture first = nullptr, second = nullptr, orm = nullptr, height = nullptr;
+		bool nativeNormal = false;
+		bool operator<(const TexturePair& o) const { return std::tie(first, second, orm, height, nativeNormal) < std::tie(o.first, o.second, o.orm, o.height, o.nativeNormal); }
+	};
 	std::map<TerrainTexture*, TexturePair> textures;
 	std::map<TexturePair, RefCntAutoPtr<IShaderResourceBinding>> bindings;
+	// the material maps' defaults (no ORM: 1, 0.65, 0; no relief: a 1 x 1 white) and each
+	// binding's TerrainMaterial buffer (native normal, height map, ORM map), by its three flags
+	texture defaultOrm = nullptr, noHeight = nullptr;
+	std::map<int, RefCntAutoPtr<IBuffer>> materialBuffers;
 	// The terrain in chunks of CHUNK x CHUNK tiles, with their index lists per texture and their
 	// water quads prebuilt, all in two index buffers on the GPU (landIndices, lakeIndices: per
 	// texture chunk after chunk, the water chunk after chunk): each frame only the chunks'
@@ -2161,6 +2344,21 @@ IShaderResourceBinding* DiligentEnhancedTerrainRenderer::Impl::binding(DiligentG
 		signature->CreateShaderResourceBinding(&srb, true);
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pair.first));
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormTexture")->Set(dgfx->GetTextureView(pair.orm ? pair.orm : defaultOrm));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "reliefTexture")->Set(dgfx->GetTextureView(pair.height ? pair.height : noHeight));
+		const int flags = (pair.nativeNormal ? 1 : 0) | (pair.height ? 2 : 0) | (pair.orm ? 4 : 0);
+		auto& mb = materialBuffers[flags];
+		if (!mb) {
+			const float mat[4] = { (flags & 1) ? 1.0f : 0.0f, (flags & 2) ? 1.0f : 0.0f, (flags & 4) ? 1.0f : 0.0f, 0.0f };
+			BufferDesc bd;
+			bd.Name = "Terrain material";
+			bd.Size = sizeof(mat);
+			bd.BindFlags = BIND_UNIFORM_BUFFER;
+			bd.Usage = USAGE_IMMUTABLE;
+			BufferData init{ mat, sizeof(mat) };
+			dgfx->device->CreateBuffer(bd, &init, &mb);
+		}
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "TerrainMaterial")->Set(mb);
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(dgfx->GetTextureView(nullptr));
@@ -2419,7 +2617,19 @@ void DiligentEnhancedTerrainRenderer::init()
 	std::map<TerrainTexture*, EnhancedTerrainTexture> textures;
 	LoadEnhancedTerrainTextures(terrain, texcache, textures);
 	for (const auto& [trntex, et] : textures)
-		_impl->textures[trntex] = { et.diffuseMap, et.normalMap };
+		_impl->textures[trntex] = { et.diffuseMap, et.normalMap, et.ormMap, et.heightMap, et.nativeNormal };
+	{
+		auto pixel = [&](uint8_t r, uint8_t g, uint8_t b) {
+			Bitmap bmp;
+			bmp.width = bmp.height = 1;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize(4);
+			bmp.pixels[0] = r; bmp.pixels[1] = g; bmp.pixels[2] = b; bmp.pixels[3] = 255;
+			return gfx->CreateTexture(bmp, 1);
+		};
+		_impl->defaultOrm = pixel(255, 166, 0);
+		_impl->noHeight = pixel(255, 255, 255);
+	}
 
 	std::vector<EnhancedTerrainVertex> trnVertices = BuildEnhancedTerrainVertices(terrain);
 	BufferDesc vbDesc;
@@ -2434,7 +2644,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 960;
+	cbDesc.Size = 976;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -2453,6 +2663,9 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "nearHorizonB", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "ormTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "reliefTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "TerrainMaterial", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "depthTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtReflectTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -3754,6 +3967,17 @@ void DiligentEnhancedTerrainRenderer::render()
 	static const float tessReach[4] = { 160.0f, 160.0f, 360.0f, 640.0f };
 	tessParams[2] = tessReach[std::clamp(g_renderSettings.terrainTessellation, 0, 3)];
 	tessParams[3] = (float)terrain->edge;
+	{
+		// the ground's parallax occlusion mapping (RenderSettings::pomTerrain): the view ray's
+		// most and fewest steps, the sun ray's, the relief's depth (TERRAIN_POM_RANGE)
+		static constexpr float POM_LEVELS[4][3] = { { 0, 0, 0 }, { 12, 6, 4 }, { 20, 8, 6 }, { 32, 12, 10 } };
+		const int level = std::clamp(g_renderSettings.pomTerrain, 0, 3);
+		float* pom = (float*)(sbdata + 960);
+		pom[0] = POM_LEVELS[level][0];
+		pom[1] = POM_LEVELS[level][1];
+		pom[2] = POM_LEVELS[level][2];
+		pom[3] = TERRAIN_POM_RANGE;
+	}
 	float* tessGrid = (float*)(sbdata + 816);
 	tessGrid[0] = (float)terrain->width;
 	tessGrid[1] = (float)terrain->height;

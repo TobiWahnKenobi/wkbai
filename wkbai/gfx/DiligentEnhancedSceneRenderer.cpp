@@ -274,7 +274,8 @@ cbuffer SunBuffer
 	float4 Material;
 	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light
 	float4 FireLights[32]; // per light: position and radius, colour
-	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
+	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without;
+	               // z the PBR debug view; w the parallax occlusion mapping (RenderSettings::pomModels: 0 off, 1 Low, 2 High)
 	// the reflections on buildings and units (RenderSettings::modelReflections): this frame's
 	// view-projection (the screen-space march), the frame before's (its colour); x: 0 off,
 	// 1 screen-space, 2 and the ray-traced; y, z: the projection's P33, P43 (view z from the
@@ -625,7 +626,7 @@ void PrepareSurface(VS_OUTPUT input)
 	SurfDx = ddx(input.Texcoord);
 	SurfDy = ddy(input.Texcoord);
 	PomShadow = 1;
-	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
+	if (MeshLighting.z == 0 || Season.w == 0 || dot(input.Norm, input.Norm) == 0)
 		return;
 	float2 hsize;
 	heightMap.GetDimensions(hsize.x, hsize.y);
@@ -646,7 +647,9 @@ void PrepareSurface(VS_OUTPUT input)
 	float en = max(-dot(e, n), 0.15);
 	float3 lat = (e + n * en) / en;                                // sideways per metre of depth
 	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
-	int steps = (int)lerp(24.0, 8.0, en);
+	// (Low: half the steps of High, and half the sun ray's)
+	const bool pomHigh = Season.w > 1.5;
+	int steps = (int)lerp(pomHigh ? 24.0 : 12.0, pomHigh ? 8.0 : 4.0, en);
 	float stepDepth = POM_RANGE / steps;
 	float2 uv = SurfUV;
 	float d = 0;
@@ -670,7 +673,7 @@ void PrepareSurface(VS_OUTPUT input)
 	if (ln > 0.02 && d > 1e-4) {
 		float3 latl = (l - n * ln) / ln;                           // sideways per metre of rise
 		float2 uvPerRise = float2(dot(gu, latl), dot(gv, latl));
-		const int sh = 10;
+		const int sh = pomHigh ? 10 : 5;
 		float occl = 0;
 		[loop] for (int j = 1; j <= sh; j++) {
 			float rise = d * j / sh;
@@ -2604,6 +2607,8 @@ void DiligentEnhancedSceneRenderer::render()
 	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..12
 	static const float modelDebug = [] { const char* e = getenv("WKBAI_MODEL_DEBUG"); return e ? (float)atoi(e) : 0.0f; }();
 	season[2] = modelDebug;
+	// the models' parallax occlusion mapping (RenderSettings::pomModels): 0 off, 1 Low, 2 High
+	season[3] = (float)std::clamp(g_renderSettings.pomModels, 0, 2);
 	// the reflections on buildings and units (DiligentGfx::shadows.modelReflections): on with the
 	// pre-pass's depth and the frame before (the same test as their textures' binding below)
 	{

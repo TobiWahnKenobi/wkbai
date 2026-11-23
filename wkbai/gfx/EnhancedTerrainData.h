@@ -31,11 +31,28 @@ struct EnhancedTerrainVertex {
 
 struct EnhancedTerrainTexture {
 	texture diffuseMap;
+	// the shader's own layout (x along the atlas' u, y up, z along v), from the game's normal or
+	// bump map; or an override pack's <atlas>_normal (nativeNormal: tangent space, +z out, as
+	// the models': x along u, y along v)
 	texture normalMap;
+	bool nativeNormal = false;
+	// override packs: <atlas>_orm (occlusion, roughness, metalness) and <atlas>_height (the relief
+	// for parallax occlusion mapping: 1 the surface, 0 TERRAIN_POM_RANGE below); nullptr without
+	// (the renderer's defaults: no PBR terms, no relief)
+	texture ormMap = nullptr;
+	texture heightMap = nullptr;
 };
 
+// How deep the terrain's parallax relief goes (world units; a tile is 5): a height map's 0
+static constexpr float TERRAIN_POM_RANGE = 0.12f;
+
+// The override pack's map beside a terrain atlas: <atlas without extension><suffix> with .png,
+// .tga, .dds or .ktx2 (the models' convention), or "" without one
+std::string TerrainOverrideMap(TextureCache* texcache, const std::string& atlasFile, const char* suffix);
+
 // Diffuse and normal map of every terrain texture. Warrior Kings has normal maps; Battles has
-// bump (height) maps, which are turned into normal maps here.
+// bump (height) maps, which are turned into normal maps here; an override pack's <atlas>_normal
+// takes their place, and its <atlas>_orm and <atlas>_height are loaded too.
 void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::map<TerrainTexture*, EnhancedTerrainTexture>& textures);
 
 // Four vertices per tile, for the whole map, tile (x, z) at 4 * (z * width + x).
