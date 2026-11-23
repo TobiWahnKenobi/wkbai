@@ -3,6 +3,48 @@
  "version": 1,
  "database": "Maps\\Map_Textures\\All_Textures.dat",
  "about": "The materials of the base game's texture database for map folders' ground rules (map.json \"ground\"; the RE repo's docs/engine/map-authoring.md, step 17.5). A mod or a texture set may ship its own Maps\\Materials\\<database name>.json, which replaces this one; a map adds or changes materials in map.json ground.materials. groups: per texture group its terrain, the terrain's speed (cost: below 1 slows), whether land units may cross it and its mean colour, from the game set's terrains; bridge: false: never a step between two other groups (snow between a cliff and grass).",
+ "generatedTransitions": {
+  "about": "Pairs of base groups the texture set has no transition for, made on the player's machine from the game's own pictures (wkbai TransitionGen.h): grass to rock, sand to hillside... so the ground solver needs no strip of a third ground between them. The most frequent causes of unmatched tiles on the Great Britain maps (2026-11-22). version: raise it to make the pictures again.",
+  "version": 1,
+  "pairs": [
+   [
+    "GRASS1",
+    "GRASS5"
+   ],
+   [
+    "MIDHILL1",
+    "SAND1"
+   ],
+   [
+    "GRASS1",
+    "ROCK1"
+   ],
+   [
+    "GRASS3",
+    "MIDHILL1"
+   ],
+   [
+    "FOREST3",
+    "GRASS3"
+   ],
+   [
+    "ROCK1",
+    "SNOW1"
+   ],
+   [
+    "MIDHILL1",
+    "SNOW1"
+   ],
+   [
+    "GRASS3",
+    "SAND1"
+   ],
+   [
+    "GRASS5",
+    "ROCK1"
+   ]
+  ]
+ },
  "materials": {
   "grass": {
    "description": "green grass, GRASS1 and GRASS3 in large patches",

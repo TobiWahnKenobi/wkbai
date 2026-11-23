@@ -15546,6 +15546,7 @@ void Test_MapMaterials();
 void Test_TiltedWater();
 // The real-place maps' test: MapWaterObjectsTest.cpp
 void Test_MapWaterObjects();
+void Test_GeneratedTransitions();
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -15667,6 +15668,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
 {Test_TiltedWater, "Tilted water: a sloped stream down a hillside into a lake (format, never rising, the lake met without a seam, floating, rapids and a fall, wading); a generated river with water, compiled, server and client the same, played"},
 {Test_MapWaterObjects, "Map water, objects and far land: a stream with water (a sloped waterway, the water kept in the channel), forests and resources by rule (none on water, conifers higher up), a stored far land compiled into the cache and loaded with the map"},
+{Test_GeneratedTransitions, "Generated ground transitions: BC7 quality against bcdec, the generated groups with their corners, BC7 files with mips and grey heights, the CPU decoding them, no second making from the same sources, made again on a stale stamp"},
 };
 
 void LaunchTest()

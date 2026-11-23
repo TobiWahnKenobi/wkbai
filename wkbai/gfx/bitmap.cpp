@@ -30,9 +30,9 @@ std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
 	if (dot == std::string::npos || (StrCICompare(fn.c_str() + dot, ".tga") && StrCICompare(fn.c_str() + dot, ".pcx")))
 		return fn;
 	const std::string base = fn.substr(0, dot);
-	for (const char* ext : { ".ktx2", ".dds", ".png" }) {
-		if (!gpu && ext[1] != 'p')
-			continue;
+	// (for the CPU a .png first; a .ktx2 or .dds, which loadBitmap decodes, when there is none:
+	// the generated ground transitions are BC7 only, TransitionGen.h)
+	for (const char* ext : gpu ? std::initializer_list<const char*>{ ".ktx2", ".dds", ".png" } : std::initializer_list<const char*>{ ".png", ".ktx2", ".dds" }) {
 		if (FileExists((base + ext).c_str()))
 			return base + ext;
 	}
@@ -41,7 +41,11 @@ std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
 
 Bitmap Bitmap::loadBitmap(const char *fname)
 {
-	return loadBitmapExact(replacementFile(fname).c_str());
+	// (a block-compressed replacement decoded: the CPU's users want pixels)
+	Bitmap b = loadBitmapExact(replacementFile(fname).c_str());
+	if (b.compressed())
+		return b.convertToR8G8B8A8();
+	return b;
 }
 
 Bitmap Bitmap::loadBitmapExact(const char *fn)

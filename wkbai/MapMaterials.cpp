@@ -308,7 +308,8 @@ namespace {
 		for (const auto& [name, g] : db.groups)
 			if (g)
 				for (const auto& [id, t] : g->textures)
-					L.rid[t.get()] = ridFor(name, id);
+					if (t->genCorners[0].empty()) // (a generated picture has no rules: it fits any neighbour)
+						L.rid[t.get()] = ridFor(name, id);
 		for (const auto& [group, byTex] : er.rules)
 			for (const auto& [id, list] : byTex) {
 				const int ra = ridFor(group, id);
@@ -340,7 +341,7 @@ namespace {
 			if (!g || !IsTransitionName(name, an, bn) || !L.groupIndex.count(an) || !L.groupIndex.count(bn))
 				continue;
 			for (const auto& [id, t] : g->textures)
-				if (!isMatching(name, id)) // the TEXTUREs: a MATCHING one shares its rules and corners
+				if (!isMatching(name, id) && t->genCorners[0].empty()) // the TEXTUREs: a MATCHING one shares its rules and corners (a generated one has neither)
 					transitions.push_back({ L.rid[t.get()], L.groupIndex[an], L.groupIndex[bn], name, id });
 		}
 		for (int pass = 0; pass < 4; pass++) {
@@ -391,11 +392,28 @@ namespace {
 		L.pure.resize(L.groups.size());
 		for (const auto& [name, g] : db.groups)
 			for (const auto& [id, t] : g->textures) {
-				auto c = ridCorners.find(L.rid[t.get()]);
-				if (c == ridCorners.end())
-					continue;
-				L.corners[t.get()] = c->second;
-				const std::array<int, 4>& cc = c->second;
+				std::array<int, 4> gen;
+				const std::array<int, 4>* found = nullptr;
+				if (!t->genCorners[0].empty()) {
+					// a generated transition (TransitionGen.h): its corners as it was made
+					bool ok = true;
+					for (int k = 0; k < 4; k++) {
+						auto gi = L.groupIndex.find(t->genCorners[k]);
+						ok = ok && gi != L.groupIndex.end();
+						gen[k] = ok ? gi->second : -1;
+					}
+					if (!ok)
+						continue;
+					found = &gen;
+				}
+				else {
+					auto c = ridCorners.find(L.rid[t.get()]);
+					if (c == ridCorners.end())
+						continue;
+					found = &c->second;
+				}
+				L.corners[t.get()] = *found;
+				const std::array<int, 4>& cc = *found;
 				if (cc[0] == cc[1] && cc[1] == cc[2] && cc[2] == cc[3]) {
 					if (L.baseOf.count(g.get()))
 						for (int k = 0; k < 8; k++)
