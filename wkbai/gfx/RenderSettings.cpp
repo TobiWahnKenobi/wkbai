@@ -103,6 +103,10 @@ void RenderSettings::load()
 	tiltShift = std::clamp(g_settings.value<float>("tiltShift", def.tiltShift), 0.0f, 1.0f);
 	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
+	pomTerrain = std::clamp(g_settings.value<int>("pomTerrain", def.pomTerrain), 0, 3);
+	pomModels = std::clamp(g_settings.value<int>("pomModels", def.pomModels), 0, 2);
+	pomModelsDepth = std::clamp(g_settings.value<float>("pomModelsDepth", def.pomModelsDepth), 0.0f, 4.0f);
+	pomTerrainDepth = std::clamp(g_settings.value<float>("pomTerrainDepth", def.pomTerrainDepth), 0.0f, 4.0f);
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
 	modelSpecular = g_settings.value<float>("modelSpecular", def.modelSpecular);
 	modelDetailNormals = g_settings.value<float>("modelDetailNormals", def.modelDetailNormals);
@@ -218,6 +222,10 @@ void RenderSettings::save()
 	g_settings["tiltShift"] = tiltShift;
 	g_settings["grassDistance"] = grassDistance;
 	g_settings["bumpMapping"] = bumpMapping;
+	g_settings["pomTerrain"] = pomTerrain;
+	g_settings["pomModels"] = pomModels;
+	g_settings["pomModelsDepth"] = pomModelsDepth;
+	g_settings["pomTerrainDepth"] = pomTerrainDepth;
 	g_settings["modelLighting"] = modelLighting;
 	g_settings["modelSpecular"] = modelSpecular;
 	g_settings["modelDetailNormals"] = modelDetailNormals;

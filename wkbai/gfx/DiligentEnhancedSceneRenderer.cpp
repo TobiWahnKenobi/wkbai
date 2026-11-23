@@ -273,9 +273,11 @@ cbuffer SunBuffer
 	// y: the snow lying on roofs and models, z: how wet they are, w: how dark the night is
 	// (wkbai's weather and day and night, 0 when off: the emissive maps' night lights)
 	float4 Material;
-	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light
+	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light,
+	                       // z: the models' relief depth, times POM_RANGE (RenderSettings::pomModelsDepth)
 	float4 FireLights[32]; // per light: position and radius, colour
-	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
+	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without;
+	               // z the PBR debug view; w the parallax occlusion mapping (RenderSettings::pomModels: 0 off, 1 Low, 2 High)
 	// the reflections on buildings and units (RenderSettings::modelReflections): this frame's
 	// view-projection (the screen-space march), the frame before's (its colour); x: 0 off,
 	// 1 screen-space, 2 and the ray-traced; y, z: the projection's P33, P43 (view z from the
@@ -607,11 +609,28 @@ static float2 SurfUV;
 static float2 SurfDx;
 static float2 SurfDy;
 static float PomShadow;
+// the relief's physical depth (metres of a height map's 0), and this frame's, scaled by the
+// setting (PrepareSurface)
 static const float POM_RANGE = 0.06;
+static float PomRange;
+
+// The HD models' atlases leave the gaps between their UV islands black, with a height of 0 (the
+// deepest): a ray that left its island fell into the gap and drew a black groove along the
+// island's edge (the edges of walls, worse the deeper the relief). A height under POM_GUTTER
+// counts as the surface for the view ray (it stops at the island's edge) and as no relief for
+// the sun ray (PomShadowDepth: the gap casts no shadow).
+static const float POM_GUTTER = 0.02;
 
 float PomDepth(float2 uv)
 {
-	return (1 - heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r) * POM_RANGE;
+	const float h = heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r;
+	return h < POM_GUTTER ? 0 : (1 - h) * PomRange;
+}
+
+float PomShadowDepth(float2 uv)
+{
+	const float h = heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r;
+	return h < POM_GUTTER ? PomRange : (1 - h) * PomRange;
 }
 
 // Parallax occlusion mapping with self-shadowing (with per-pixel lighting, for materials with a
@@ -626,7 +645,8 @@ void PrepareSurface(VS_OUTPUT input)
 	SurfDx = ddx(input.Texcoord);
 	SurfDy = ddy(input.Texcoord);
 	PomShadow = 1;
-	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
+	PomRange = POM_RANGE * FireLightCount.z;
+	if (MeshLighting.z == 0 || Season.w == 0 || PomRange <= 0 || dot(input.Norm, input.Norm) == 0)
 		return;
 	float2 hsize;
 	heightMap.GetDimensions(hsize.x, hsize.y);
@@ -635,7 +655,7 @@ void PrepareSurface(VS_OUTPUT input)
 	float3 n = normalize(input.Norm);
 	float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
 	float footprint = max(length(dp1), length(dp2));
-	if (POM_RANGE < footprint * 0.33)
+	if (PomRange < footprint * 0.33)
 		return;
 	float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
 	float det = dot(dp1, dp2perp);
@@ -647,8 +667,10 @@ void PrepareSurface(VS_OUTPUT input)
 	float en = max(-dot(e, n), 0.15);
 	float3 lat = (e + n * en) / en;                                // sideways per metre of depth
 	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
-	int steps = (int)lerp(24.0, 8.0, en);
-	float stepDepth = POM_RANGE / steps;
+	// (Low: half the steps of High, and half the sun ray's)
+	const bool pomHigh = Season.w > 1.5;
+	int steps = (int)lerp(pomHigh ? 24.0 : 12.0, pomHigh ? 8.0 : 4.0, en);
+	float stepDepth = PomRange / steps;
 	float2 uv = SurfUV;
 	float d = 0;
 	float gap = PomDepth(uv);                                      // > 0: the ray is above the relief
@@ -671,12 +693,12 @@ void PrepareSurface(VS_OUTPUT input)
 	if (ln > 0.02 && d > 1e-4) {
 		float3 latl = (l - n * ln) / ln;                           // sideways per metre of rise
 		float2 uvPerRise = float2(dot(gu, latl), dot(gv, latl));
-		const int sh = 10;
+		const int sh = pomHigh ? 10 : 5;
 		float occl = 0;
 		[loop] for (int j = 1; j <= sh; j++) {
 			float rise = d * j / sh;
-			float above = (d - rise) - PomDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
-			occl = max(occl, saturate(above / POM_RANGE * 6 * (1 - (float)j / (sh + 1))));
+			float above = (d - rise) - PomShadowDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
+			occl = max(occl, saturate(above / PomRange * 6 * (1 - (float)j / (sh + 1))));
 		}
 		PomShadow = 1 - occl;
 	}
@@ -2607,6 +2629,8 @@ void DiligentEnhancedSceneRenderer::render()
 	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..12
 	static const float modelDebug = [] { const char* e = getenv("WKBAI_MODEL_DEBUG"); return e ? (float)atoi(e) : 0.0f; }();
 	season[2] = modelDebug;
+	// the models' parallax occlusion mapping (RenderSettings::pomModels): 0 off, 1 Low, 2 High
+	season[3] = (float)std::clamp(g_renderSettings.pomModels, 0, 2);
 	// the reflections on buildings and units (DiligentGfx::shadows.modelReflections): on with the
 	// pre-pass's depth and the frame before (the same test as their textures' binding below)
 	{
@@ -2632,6 +2656,8 @@ void DiligentEnhancedSceneRenderer::render()
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
 	fire[0] = (float)numFires;
 	fire[1] = NightCastShare(false);   // the windows' cast light at night (MeanEmission)
+	fire[2] = std::clamp(g_renderSettings.pomModelsDepth, 0.0f, 4.0f);  // the models' relief depth
+	fire[3] = 0.0f;
 	for (int i = 0; i < numFires; i++) {
 		std::copy_n(&fireLights[i * 7], 4, fire + 4 + i * 8);
 		std::copy_n(&fireLights[i * 7 + 4], 3, fire + 8 + i * 8);

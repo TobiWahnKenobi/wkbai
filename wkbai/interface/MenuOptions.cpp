@@ -267,6 +267,20 @@ namespace {
 			list.push_back(o);
 		}
 		{
+			// parallax occlusion mapping where an override pack has height maps (RenderSettings::
+			// pomTerrain, pomModels): two settings, the ground's costs much more
+			MenuOption o;
+			o.id = "pomTerrain"; o.page = "terrain"; o.label = "Parallax occlusion mapping (terrain)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.pomTerrain; };
+			o.set = [&rs](float v) { rs.pomTerrain = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
+		// the relief's depth, times the physical 12 cm (RenderSettings::pomTerrainDepth)
+		list.push_back(withEnabled(slider("pomTerrainDepth", "terrain", "Parallax depth (terrain)", rs.pomTerrainDepth, 0.0f, 4.0f, "%.2fx"),
+			[&rs]() { return rs.pomTerrain > 0; }));
+		{
 			// the land continued beyond the map's edge (drawn only; ExtendMap.h)
 			MenuOption o;
 			o.id = "extendMap"; o.page = "terrain"; o.label = "Extend map";
@@ -395,6 +409,19 @@ namespace {
 		}
 		list.push_back(withEnabled(slider("modelDetailNormals", "models", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));
+		{
+			// (where an override pack has <texture>_height maps)
+			MenuOption o;
+			o.id = "pomModels"; o.page = "models"; o.label = "Parallax occlusion mapping (models)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "High" };
+			o.get = [&rs]() { return (float)rs.pomModels; };
+			o.set = [&rs](float v) { rs.pomModels = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.modelLighting; }));
+		}
+		// the relief's depth, times the physical 6 cm (RenderSettings::pomModelsDepth)
+		list.push_back(withEnabled(slider("pomModelsDepth", "models", "Parallax depth (models)", rs.pomModelsDepth, 0.0f, 4.0f, "%.2fx"),
+			[&rs]() { return rs.modelLighting && rs.pomModels > 0; }));
 		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
 		list.push_back(slider("meshDiffuse", "models", "Model sunlight", rs.meshDiffuse, 0.0f, 1.5f));
 
@@ -656,6 +683,22 @@ namespace {
 void BeginEditMenuOptions()
 {
 	g_optionsSnapshot = g_settings;
+}
+
+// A page's settings back to their defaults (the Options screen's Default button, the graphics
+// pages; all of theirs are RenderSettings): each option's value read from a default
+// RenderSettings, then set through the option (its own clamps); saved or reverted with the rest
+void ResetMenuPage(const std::string& page)
+{
+	std::vector<std::pair<const MenuOption*, float>> defaults;
+	const RenderSettings current = g_renderSettings;
+	g_renderSettings = RenderSettings();
+	for (const MenuOption& o : GetMenuOptions())
+		if (o.page == page && o.get && o.set && o.type != MenuOption::TEXT)
+			defaults.emplace_back(&o, o.get());
+	g_renderSettings = current;
+	for (const auto& [o, v] : defaults)
+		o->set(v);
 }
 
 void RevertMenuOptions()
