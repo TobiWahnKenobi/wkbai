@@ -59,13 +59,14 @@ In a hard frost rivers and lakes freeze. Once the ice is thick, land units can w
 
 > **wkbai.** On by default in a skirmish with the seasons; the lobby has no switch for it.
 
-Artillery shots that land on the ice, or hit a unit standing on it, break a hole into it: a [Trebuchet](../units/trebuchet.md)'s ball about 5.5 m wide, a [Bombard](../units/bombard.md)'s 4 m, a [Mangonel](../units/mangonel.md)'s 3.5 m (also from a ship), a [Rocket Launcher](../units/rocket-launcher.md)'s rocket 2.5 m. Arrows, bullets and javelins don't.
+Artillery shots that land on the ice, or hit a unit standing on it, break a hole into it. Its radius, from the middle to the edge: a [Trebuchet](../units/trebuchet.md)'s ball 5.5 m (about 11 m across), a [Bombard](../units/bombard.md)'s 4 m, a [Mangonel](../units/mangonel.md)'s 3.5 m (also a Mangonel Boat's or a ship's), a [Rocket Launcher](../units/rocket-launcher.md)'s rocket 2.5 m. Arrows, bullets, javelins and fire balls break nothing, nor does a shot that hits more than 4 m above the ice (a unit on a tower).
 
-- **Falling in:** every unit over deep water in the hole falls in and loses a tenth of its health at once, then more every second it stays in the icy water. A unit that can swim swims at half its speed to the nearest ice or shore it can stand on; war machines sink, and the huge creatures and members of a formation can't swim out. In shallow water units just wade.
+- **Falling in:** every unit over deep water in the hole (deeper than 1.5 m) falls in and loses a tenth of its health at once, then 6 % a second while it stays in the icy water (the undead 12 %). War machines lose 25 % a second and sink. In shallow water inside a hole units just wade.
+- **Swimming out:** a unit that can swim swims at half its speed to the nearest ice or shore it can stand on. Units that can't swim drown where they are, and the huge creatures can't swim out. Members of a formation are hurt but stay with their formation. The Archangel Michael and Abaddon walk the bed unharmed.
 - **Drowned:** a unit that dies in the hole counts as the shooter's kill, if their players are enemies, and as drowned in the statistics.
 - **Holes on the map:** walkers go round them, and a boat in a hole is free to move.
-- **Freezing over:** while it freezes, a hole closes from its edges, faster the harder the frost: a Bombard's hole in about a minute and a half at -10 °C, over ten minutes at -1 °C. Above freezing it stays open; when the ice thaws, the holes go with it. A shot into thin new ice breaks it again.
-- **Drawn** as broken ice: the edge runs along the ice's plates, the plates round it are sunk and tilted with open cracks between them, and floes drift in the dark water ([ice quality](../options/graphics/sky-weather.md#ice-quality)). Saved games keep the holes.
+- **Freezing over:** while it freezes, a hole closes from its edges, faster the harder the frost: a Bombard's hole in about a minute and a half at -10 °C, about 13 minutes at -1 °C. Above 0 °C it stays open; when the ice thaws away, its holes go with it. A shot into a hole that is freezing over breaks the new ice again.
+- **Drawn** as broken ice: the edge runs along the ice's plates, the plates round it are sunk and tilted with open cracks between them, and floes drift in the dark water ([ice quality](../options/graphics/sky-weather.md#ice-quality)). Once a hole has closed, its new ice is drawn darker and thinner for a while. Saved games keep the holes.
 
 ### Wildfires
 
