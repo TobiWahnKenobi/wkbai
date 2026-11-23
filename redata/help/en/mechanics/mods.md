@@ -29,7 +29,17 @@ wkbai reads more kinds of model and texture than the original, so a mod can brin
 
 - **glTF models:** a file `X.glb` or `X.gltf` beside a game model `X.mesh3`, at the same path, is drawn in its place. It may be in a mod, or in the `saved` folder of [your own folder](../files.md#your-own-folder). A glTF model has at most 65,535 vertices and no animation of its own, and keeps the original model's attachment points (flags, smoke, the place where new units appear).
 - **Exporting the game's models:** `"exportGltf": ["Warrior Kings Game Set\\Buildings\\Manor"]` in `wkconfig.json` writes each model of that folder and its subfolders (or a single `.mesh3` named there) as a `.glb` file into the `exported` folder of your own folder, at its own path. wkbai then closes. Take the setting out again afterwards. Edit an exported model and put it into `saved` at the same path to try it, for example `saved\Warrior Kings Game Set\Buildings\Manor\Fully Built\DEFAULT.glb`.
-- **Material maps:** beside a texture `T.tga`, the files `T_albedo`, `T_normal`, `T_orm` (ambient occlusion, roughness and metalness) and `T_emissive` (light of its own, such as lit windows), each `.png`, `.tga`, `.dds` or `.ktx2`, give the enhanced renderer more detail for every model that uses that texture. They show best with [Model highlights](../options/graphics/models.md#model-highlights) on.
+- **Material maps:** beside a texture `T.tga`, the files `T_albedo`, `T_normal`, `T_orm` (ambient occlusion, roughness and metalness) and `T_emissive` (light of its own, such as lit windows), each `.png`, `.tga`, `.dds` or `.ktx2`, give the enhanced renderer more detail for every model that uses that texture. They show best with [Model highlights](../options/graphics/models.md#model-highlights) on. A `T_height` map adds relief ([parallax occlusion mapping](../options/graphics/models.md#parallax-occlusion-mapping-models)).
+
+## Material maps for the ground
+
+The ground's pictures (`Maps\Map_Textures\<name>`, each an atlas of 4 x 4 cells) can have material maps too, beside a mod's replacement picture in the same folder; any of them may be missing:
+
+- **`<name>_normal`:** the surface's bumps as a normal map (+z out, the DirectX layout). Without it, the game's own bump map is used as before.
+- **`<name>_orm`:** occlusion, roughness and metalness, so the ground catches the sun and the sky as the models do. Without it, the ground is lit as before.
+- **`<name>_height`:** the relief for [parallax occlusion mapping](../options/graphics/terrain-grass.md#parallax-occlusion-mapping-terrain): white is the surface, black 12 cm below it.
+
+The maps cover the whole atlas in the picture's own layout, cell for cell. Blur and make mipmaps within each cell, never across a cell's edge, since the cells are unrelated pictures. They are read as linear data, not sRGB, and the normal map should match the height map's slopes.
 
 ## Levels that name what the game set lacks
 

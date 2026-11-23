@@ -1,6 +1,6 @@
 ---
 title: Terrain and grass
-ids: [ui/frontend/options/terrain, option/terrainFresnel#ground-fresnel-sky-sheen, option/terrainTessellation#terrain-tessellation, option/extendMap#extend-map, option/extendMapDetail#extend-map-detail, option/extendMapShadows#far-land-shadows, option/farLandCache#keep-the-far-land-on-disk, option/farLandCacheMB#far-land-cache-size-mb, option/windTrees#trees-in-the-wind, option/grass#grass, option/grassWind#grass-in-the-wind, option/grassDensity#grass-density, option/grassHeight#grass-height, option/grassDistance#grass-distance, option/bumpMapping#terrain-bump-mapping]
+ids: [ui/frontend/options/terrain, option/terrainFresnel#ground-fresnel-sky-sheen, option/terrainTessellation#terrain-tessellation, option/pomTerrain#parallax-occlusion-mapping-terrain, option/pomTerrainDepth#parallax-depth-terrain, option/extendMap#extend-map, option/extendMapDetail#extend-map-detail, option/extendMapShadows#far-land-shadows, option/farLandCache#keep-the-far-land-on-disk, option/farLandCacheMB#far-land-cache-size-mb, option/windTrees#trees-in-the-wind, option/grass#grass, option/grassWind#grass-in-the-wind, option/grassDensity#grass-density, option/grassHeight#grass-height, option/grassDistance#grass-distance, option/bumpMapping#terrain-bump-mapping]
 order: 50
 ---
 
@@ -24,6 +24,19 @@ The ground is divided into finer pieces near the camera, smoothed between the ma
 - **High:** up to 16.
 
 Needs a graphics card that can tessellate. **Cost:** small at Medium, more at High with the camera low.
+
+## Parallax occlusion mapping (terrain)
+
+Gives the ground's textures real relief: stones, ruts and clods stand out and hide what lies behind them, and cast their own small shadows. It needs ground textures with height maps, from a mod or texture pack ([material maps](../../mechanics/mods.md#material-maps-for-the-ground)); the game's own textures have none, so without such a pack this setting changes nothing.
+
+- **Off** (the default).
+- **Low**, **Medium**, **High:** more steps along each view and sun ray, so the relief is finer and its edges cleaner.
+
+Ground far enough away that its relief would be less than a third of a pixel deep is drawn without it. **Cost:** up to about 0.5 ms with near ground filling the screen at High, about 0.2 ms over usual views (Radeon RX 6900 XT, 1920 x 1080).
+
+## Parallax depth (terrain)
+
+With Parallax occlusion mapping (terrain) on: how deep the ground's relief is, 0 to 4 times its real depth (default 1, up to 12 cm; 4 makes it 48 cm). At the game's usual zoom the real depth is shallow: raise it to see the relief more. **Cost:** none.
 
 ## Extend map
 
