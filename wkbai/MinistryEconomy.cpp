@@ -31,7 +31,7 @@ namespace {
 	struct Items {
 		const GameSet* of = nullptr;
 		int popLimit = -1, popCount = -1, si = -1, siCap = -1;
-		int mineGold = -1, chop = -1, repair = -1;
+		int mineGold = -1, chop = -1, repair = -1, warFarms = -1;
 		void update(const GameSet* gs) {
 			if (of == gs)
 				return;
@@ -43,6 +43,7 @@ namespace {
 			mineGold = gs->commands.names.getIndex("Mine Gold");
 			chop = gs->commands.names.getIndex("Chop Tree");
 			repair = gs->commands.names.getIndex("Repair");
+			warFarms = gs->items.names.getIndex("War Farms Needed");
 		}
 	} g_items;
 
@@ -325,6 +326,33 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	// the hold, 54 without; slot 1 30 of 60 against 21.)
 	if (const int hold = (int)Tune("openingPeasants", 30.0f); hold > 0 && OpeningShort(g) > 0)
 		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, std::max(hold, (int)peasants.size())); // (a hold, no peasant is lost: those over it stay, none comes)
+	// More farms with wood to spare (WKB_MINOFF 262144 off). The Kingmaker scripts want max(10,
+	// peasants / 2.5) farms ("How Many Farms I Want"), or "War Farms Needed" when that is set (their
+	// tactical commissions freeze it at the farms there are); a farm costs 50 wood and the peasants
+	// go to the unattended ones first. The farms gathered about 90 food a minute for 40 peasants on
+	// either side while the ministries' wood rose to 1,400-2,400 unspent. So over "farmWood" (600)
+	// wood with food under 500, a farm for every "farmRatio" (1.6) peasants, until the wood is under
+	// 200; then the scripts' own number again (only if they haven't set one meanwhile).
+	if (g_items.warFarms >= 0 && !(MinOff() & 262144)) {
+		const float wood = me->getItem(Tags::PDITEM_WOOD), food = me->getItem(Tags::PDITEM_FOOD);
+		const double set = g.board.get("labour.farmsSet");
+		const bool on = set > 0.0 ? wood >= 200.0f : wood > Tune("farmWood", 600.0f) && food < 500.0f;
+		if (on) {
+			const int want = std::max(10, (int)std::ceil(peasants.size() / Tune("farmRatio", 1.6f)));
+			if (me->getItem(g_items.warFarms) < (float)want) {
+				if (set <= 0.0)
+					g.log(LABOUR, "more farms: %d for %zu peasants (wood %.0f, food %.0f)", want, peasants.size(), wood, food);
+				me->setItem(g_items.warFarms, (float)want);
+				g.board.report("labour.farmsSet", want);
+			}
+		}
+		else if (set > 0.0) {
+			if (me->getItem(g_items.warFarms) == (float)set)
+				me->setItem(g_items.warFarms, 0.0f);
+			g.log(LABOUR, "the farms back to the scripts' number (wood %.0f)", wood);
+			g.board.report("labour.farmsSet", 0);
+		}
+	}
 	ai.ministryPeasants = (int)peasants.size();
 	g.board.report("labour.cap", ai.ministryPeasantCap);
 	ServerGameObject* palace = AIUtil::Palace(me);

@@ -3828,6 +3828,37 @@ void Test_AIvsAI()
 						works += " " + city->blueprint->name + "#" + std::to_string(city->id) + ":" + std::to_string(woi.unitFinder->eval(&cityCtx).size()) + " units";
 					}
 				printf("AITEST   work orders:%s\n", works.c_str());
+				// the foundations: where each is and how many of the player's characters have it as their
+				// task's target (a farm foundation nobody came to held Elinor's farms at 20 on Heavy Forest)
+				{
+					std::map<const ServerGameObject*, int> at;
+					std::vector<const ServerGameObject*> founds;
+					std::vector<ServerGameObject*> todo{ player };
+					while (!todo.empty()) {
+						ServerGameObject* o = todo.back();
+						todo.pop_back();
+						for (const auto& [ctype, kids] : o->children)
+							for (CommonGameObject* k : kids) {
+								ServerGameObject* c = (ServerGameObject*)k;
+								if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.find("Foundation") != std::string::npos)
+									founds.push_back(c);
+								else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+									Order* co = c->orderConfig.getCurrentOrder();
+									if (co && co->getCurrentTask())
+										if (const ServerGameObject* t = co->getCurrentTask()->target.get())
+											at[t]++;
+								}
+								todo.push_back(c);
+							}
+					}
+					std::string list;
+					for (const ServerGameObject* fo : founds) {
+						char buf[128];
+						snprintf(buf, sizeof(buf), " %s#%u (%.0f,%.0f) workers %d", fo->blueprint->name.c_str(), fo->id, fo->position.x, fo->position.z, at.count(fo) ? at[fo] : 0);
+						list += buf;
+					}
+					printf("AITEST   foundations player %u:%s\n", player->id, list.c_str());
+				}
 				// the commissions: suspended or not, and per requirement how many are needed and there
 				for (const CommissionInstance& ci : player->aiController.commissionInstances) {
 					ServerGameObject* handler = ci.handlerObject.get();
