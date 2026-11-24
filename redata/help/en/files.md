@@ -40,6 +40,7 @@ The folder you unpacked wkbai into (strictly, the folder wkbai is started from):
 | `farlandcache` | the land beyond the map's edge, kept on disk ([Extend map](options/graphics/terrain-grass.md#keep-the-far-land-on-disk)); safe to delete |
 | `help\shots` | the screenshots this help shows, once they are taken |
 | `HostMods` | mods a multiplayer host sent you, for that game only; wkbai removes them after the game |
+| `chronicles` | timelines you exported as Markdown or web pages ([Export](ui/hud/chronicle.md#export)) |
 | `exported` | models exported for modding ([mods](mechanics/mods.md#replacing-models-and-textures)) |
 | `plugins` | matchmaking plugins, if you have any |
 | `agent` | pictures taken by a program playing through [agent control](options/agent-control.md) |

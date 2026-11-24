@@ -57,6 +57,7 @@
 #include "../gfx/bitmap.h"
 #include "../Mesh.h"
 #include "../file.h"
+#include "TimelineExport.h"
 
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
@@ -2677,6 +2678,32 @@ void ClientInterface::drawChronicle()
 		}
 		ImGui::End();
 	}
+	// the timeline's Export (interface/TimelineExport.cpp): the events the window shows, as a
+	// Markdown file or a web page in the user folder's "chronicles" folder
+	auto exportTimeline = [&](bool html) {
+		TimelineExport::Input in;
+		in.chronicle = &chronicle;
+		in.all = all;
+		in.viewer = nameOf(own);
+		in.name = nameOf;
+		in.colour = [&](uint32_t p) { return (uint32_t)colourOf(p); };
+		in.context.fromSettings(client->environmentSettings, client->environmentActive);
+		in.context.playerName = nameOf;
+		return TimelineExport::write(in, html);
+	};
+	static std::filesystem::path exported; // the last file the Export wrote (its line under the switch)
+	static bool exportFailed = false;
+	// test runs: "benchmark": { ..., "timelineExport": ["md", "html"] } exports once, 200 frames in
+	if (BenchmarkEnabled()) {
+		static int frames = 0;
+		if (++frames == 200)
+			for (const auto& f : g_settings.value("benchmark", nlohmann::json::object()).value("timelineExport", nlohmann::json::array()))
+				if (f.is_string()) {
+					exported = exportTimeline(f.get<std::string>() == "html");
+					exportFailed = exported.empty();
+					printf("TIMELINE EXPORT %s %s\n", f.get<std::string>().c_str(), exportFailed ? "FAILED" : PathToUtf8(exported).c_str());
+				}
+	}
 	if (timelineOpen) {
 		ImGui::SetNextWindowPos(ImVec2(680, 110), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
@@ -2692,6 +2719,39 @@ void ClientInterface::drawChronicle()
 			if (ImGui::RadioButton("Statistics", !story) && story) {
 				g_settings["timelineChronicle"] = false;
 				SaveSettings();
+			}
+			// Export (at the row's right end): the events shown, as Markdown or a web page
+			const float exportWidth = ImGui::CalcTextSize("Export...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - exportWidth));
+			if (ImGui::Button("Export..."))
+				ImGui::OpenPopup("##timelineExport");
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Save this timeline as a file: Markdown (for forums and wikis) or a web page");
+			if (ImGui::BeginPopup("##timelineExport")) {
+				int format = -1;
+				if (ImGui::MenuItem("Markdown (.md)"))
+					format = 0;
+				if (ImGui::MenuItem("Web page (.html)"))
+					format = 1;
+				if (format >= 0) {
+					exported = exportTimeline(format == 1);
+					exportFailed = exported.empty();
+				}
+				ImGui::EndPopup();
+			}
+			if (exportFailed)
+				ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.35f, 1.0f), "The file could not be written.");
+			else if (!exported.empty()) {
+				ImGui::TextDisabled("Saved: %s", PathToUtf8(exported.filename()).c_str());
+				ImGui::SameLine();
+				if (ImGui::SmallButton("Open"))
+					ImGui::GetPlatformIO().Platform_OpenInShellFn(ImGui::GetCurrentContext(), PathToUtf8(exported).c_str());
+				ImGui::SameLine();
+				if (ImGui::SmallButton("Folder"))
+					ImGui::GetPlatformIO().Platform_OpenInShellFn(ImGui::GetCurrentContext(), PathToUtf8(exported.parent_path()).c_str());
+				ImGui::SameLine();
+				if (ImGui::SmallButton("x"))
+					exported.clear();
 			}
 			ImGui::Separator();
 			ImGui::BeginChild("##entries");
