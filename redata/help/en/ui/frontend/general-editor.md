@@ -21,11 +21,11 @@ The general's name, up to 32 characters: click the box and type it (it is empty 
 
 ## Category
 
-The general's tier: **Conscript**, **Veteran** or **Elite**. A click takes the next. The skirmish lobby lists the general under this tier, and the campaign deals generals by tier.
+The button under the portrait's arrows, **Tier: ...**: the general's tier, **Conscript**, **Veteran** or **Elite**. A click takes the next. The skirmish lobby lists the general under this tier, and the campaign deals generals by tier.
 
 ## Alignment
 
-The general's side of the game's three paths: **Pagan**, **Renaissance** or **Imperial**. A click takes the next.
+The button under the tier, **Path: ...**: the general's side of the game's three paths, **Pagan**, **Renaissance** or **Imperial**. A click takes the next.
 
 ## Randomise All
 

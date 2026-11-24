@@ -2875,10 +2875,11 @@ Screens.generaleditor = {
 		local nameField = textField(editor.name, px(10), py(58), pl(150), pl(24), FILE_NAME_REFUSED, 32)
 
 		-- category, alignment, random
-		if button(T(TIER_TEXT[GE_CATEGORIES[editor.category]] or GE_CATEGORIES[editor.category]), px(10), py(320), pl(150), pl(22)) then
+		-- (each says what it sets: a bare "Veteran" and "Renaissance" read as nothing, the user 2026-11-24)
+		if button("Tier: " .. T(TIER_TEXT[GE_CATEGORIES[editor.category]] or GE_CATEGORIES[editor.category]), px(10), py(320), pl(150), pl(22)) then
 			editor.category = editor.category % #GE_CATEGORIES + 1
 		end
-		if button(GE_ALIGNMENTS[editor.alignment], px(10), py(346), pl(150), pl(22), nil, nil, FE_Help.idsFor(nil, "alignment")) then
+		if button("Path: " .. GE_ALIGNMENTS[editor.alignment], px(10), py(346), pl(150), pl(22), nil, nil, FE_Help.idsFor(nil, "alignment")) then
 			editor.alignment = editor.alignment % #GE_ALIGNMENTS + 1
 		end
 		if button(T("FRONT_END_GENERAL_CREATION_RANDOM"), px(10), py(372), pl(150), pl(22)) then
