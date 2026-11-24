@@ -107,9 +107,10 @@ add_executable (wkbai "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lzr
 "gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp"
 "matchmaking/Matchmaking.h" "matchmaking/Matchmaking.cpp" "matchmaking/Services.h" "matchmaking/EnetTransport.h" "matchmaking/EnetTransport.cpp"
 "matchmaking/LocalService.cpp" "matchmaking/NakamaService.cpp" "matchmaking/PluginService.cpp" "matchmaking/HttpClient.h" "matchmaking/HttpClient.cpp" "matchmaking/wkbai_mm_plugin.h")
-# test.cpp (every built-in test) has outgrown an object file's 65,536 sections (MSVC C1128)
+# test.cpp (every built-in test) and interface/ClientInterface.cpp have outgrown an object
+# file's 65,536 sections (MSVC C1128)
 if(MSVC)
-  set_source_files_properties(test.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+  set_source_files_properties(test.cpp interface/ClientInterface.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 target_link_libraries (wkbai
   imgui
