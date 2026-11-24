@@ -397,6 +397,15 @@ function CCUI_PerFrame()
 		if over ~= "" then drawText(12, getWindowHeight() - 346, over) end
 		info = 0
 	end
+	-- (a selected formation: the window holds the formation pad, below; only the tally over the
+	-- panel, as the member's information gave it)
+	if info ~= 0 and isFormationPadShown() then
+		local over = getFormationSummary(info)
+		local best = getSelectionBest()
+		if best ~= "" then over = (over ~= "" and (over .. "    ") or "") .. best end
+		if over ~= "" then drawText(12, getWindowHeight() - 346, over) end
+		info = 0
+	end
 	-- (a disguised enemy shows nothing: the panel would give it away)
 	if info ~= 0 and not isDisguised(info) then drawSelectionInformation(info) end
 	-- a replay takes no orders: no command panels, only what is selected
@@ -549,32 +558,56 @@ function CCUI_PerFrame()
 					commandProgress(x, y, hi, hi, cs)
 				end
 			end
-		elseif bp.bpClass == GAMEOBJCLASS_FORMATION then
-			local formationNames = { "Line", "Column", "Wedge", "Orb" }
-			for i = 1,#formationNames do
-				local x = 360 + (i-1)*70
-				local y = getWindowHeight() - 100
-				local w = 64
-				local h = 64
-				local mx = getMouseX()
-				local my = getMouseY()
-				local tex = ""
-				uiElement("formation:" .. formationNames[i], formationNames[i], x, y, w, h, true)
-				if bp.name == formationNames[i] then
-					tex = "Interface/Icons/I_Formation_" .. formationNames[i] .. "_Dep.tga"
-				else
-					tex = "Interface/Icons/I_Formation_" .. formationNames[i] .. ".tga"
+		elseif bp.bpClass == GAMEOBJCLASS_FORMATION and isFormationPadShown() then
+			-- The formation pad, as the original's: a round pad in the window of the lower left panel,
+			-- four quarters about the rose's middle (130, 197 of Bottom_Left_Panel.tga) with the
+			-- original's art (Interface/InGame/Formations: each quarter plain, _High under the mouse,
+			-- _Dep the current shape or pressed, _Grey not possible) and the cross over them
+			-- (Divider.tga). Column top left, Line top right, Wedge bottom left, Orb bottom right.
+			local art = "Interface/InGame/Formations/"
+			local cx, cy = 130, getWindowHeight() - 326 + 197
+			local quarters = {
+				{ "Column", cx - 100, cy - 101, 100, 101 },
+				{ "Line", cx, cy - 101, 99, 101 },
+				{ "Wedge", cx - 100, cy, 100, 98 },
+				{ "Orb", cx, cy, 99, 98 },
+			}
+			local mx, my = getMouseX(), getMouseY()
+			local dx, dy = mx - cx, my - cy
+			local inPad = dx * dx + dy * dy <= 101 * 101
+			for _, q in ipairs(quarters) do
+				local name, x, y, w, h = q[1], q[2], q[3], q[4], q[5]
+				local cmd = getCommand(name)
+				local enabled = cmd ~= nil and getCommandState(cmd) == CSInfo.ENABLED
+				uiElement("formation:" .. name, name, x, y, w, h, enabled)
+				local over = inPad and (dx < 0) == (x < cx) and (dy < 0) == (y < cy)
+				local tex = art .. name .. ".tga"
+				if not enabled then
+					tex = art .. name .. "_Grey.tga"
+				elseif bp.name == name or (over and isMouseDown(1)) then
+					tex = art .. name .. "_Dep.tga"
+				elseif over then
+					tex = art .. name .. "_High.tga"
 				end
-				if x <= mx and mx < x+w and y <= my and my < y+h then
-					setTooltip(formationNames[i])
+				if over then
+					if bp.name == name then
+						setTooltip(name .. " (current formation)")
+					elseif enabled then
+						setTooltip(name)
+					else
+						local hint = cmd and getCommandHint(cmd, sel) or ""
+						setTooltip(name .. " (not possible)" .. ((hint ~= "" and hint ~= name) and ("\n" .. hint) or ""))
+					end
 					local clicked = handleButton()
-					if clicked == 1 then
-						forceLaunchCommand(getCommand(formationNames[i]), ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE)
+					if clicked == 1 and enabled then
+						forceLaunchCommand(cmd, ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE)
 					end
 				end
-				drawImage(x, y, w, h, tex)
-
+				-- (the art is about 70 % opaque; the original's pad hid the window's rose, so three
+				-- layers: about 97 %, the soft rim kept)
+				for _ = 1, 3 do drawImage(x, y, w, h, tex) end
 			end
+			drawImage(cx - 101.5, cy - 101.5, 203, 203, art .. "Divider.tga")
 		end
 
 	end

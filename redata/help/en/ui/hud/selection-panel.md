@@ -8,7 +8,7 @@ order: 30
 
 ![The selection panel with a spearman selected](shot:hud-selection-panel-soldier)
 
-The round panel in the lower left corner shows the **first selected** unit or building. For a selected formation of one type it shows one of its members: its picture, hit points and values. A formation of several types shows a figure of each type in the window, side by side and overlapping, each turning; its members' values and names don't apply, so only the formation's line [over the panel](#over-the-panel) is shown. With nothing selected, it shows **whatever is under the mouse**, your own or an enemy's, so you can size up an enemy soldier by pointing at it.
+The round panel in the lower left corner shows the **first selected** unit or building. A selected formation of your own fills the window with the [formation pad](command-panel.md#formation-buttons), its four shapes, as in the original game; only the formation's line [over the panel](#over-the-panel) is shown with it. In a replay, where the pad takes no orders, and for another player's formation, a formation of one type shows one of its members (its picture, hit points and values), and a formation of several types a figure of each type, side by side and overlapping, each turning. With nothing selected, it shows **whatever is under the mouse**, your own or an enemy's, so you can size up an enemy soldier by pointing at it.
 
 The [command buttons](command-panel.md#knuckle-buttons) for the selection sit around the panel's rim.
 

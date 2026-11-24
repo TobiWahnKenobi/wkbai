@@ -3316,6 +3316,17 @@ const CommonGameObject* PanelSubject(const CommonGameObject* obj)
 // The selected (else the hovered) character standing in the middle of the lower left panel's
 // stained-glass window, slowly turning, as the original's selection window shows it: its model
 // with its current animation, drawn after the HUD into a square there (Diligent only).
+// The formation pad in the lower left panel's window: a formation of the player's selected, orders
+// possible (a replay, or another player's formation, shows its figures)
+bool ClientInterface::formationPadShown() const
+{
+	if (replayMode || selection.empty())
+		return false;
+	ClientGameObject* sel = selection.begin()->get();
+	return sel && sel->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && client->clientPlayer
+		&& sel->getPlayer() == client->clientPlayer.get();
+}
+
 void ClientInterface::drawSelectionPortrait()
 {
 	DiligentGfx* dgfx = dynamic_cast<DiligentGfx*>(gfx);
@@ -3323,6 +3334,10 @@ void ClientInterface::drawSelectionPortrait()
 	if (!dgfx || !sceneRenderer || !scene || !client->getLevel() || !loadingDone || editorOn || (frontEnd && frontEnd->isOpen()))
 		return;
 	ClientGameObject* sel = selection.empty() ? nullptr : selection.begin()->get();
+	// a selected formation: the window holds the formation pad (ClientUIScript.lua), as the
+	// original's, not its figures
+	if (formationPadShown())
+		return;
 	if (!sel)
 		sel = nextSelectedObject.get();
 	// the figures: the object, or a formation's member of each type (PanelSubjects); characters and
@@ -5817,6 +5832,26 @@ void ClientInterface::iter()
 					if (obj)
 						client->sendCommand(obj, cmd, assignmentMode);
 			});
+		// the formation pad: whether it fills the selection window, and a shape command's state for the
+		// first selected (0 enabled, 1 impossible, 2 wait; 1 too when its ICON_CONDITION fails, as a
+		// ghost army's "Subordinate not Ghost": the quarter is greyed, never missing)
+		lua.set_function("isFormationPadShown", [this]() { return formationPadShown(); });
+		lua.set_function("getCommandState",
+			[this](const Command* cmd) -> int {
+				if (!cmd || selection.empty() || !selection.begin()->get())
+					return 1;
+				ClientGameObject* sel = selection.begin()->get();
+				CliScriptContext ctx{ client, sel };
+				auto _tv = ctx.change(ctx.selectedObject, sel);
+				auto iconPred = [this, &ctx](int eq) { return client->gameSet->equations[eq]->booleval(&ctx); };
+				auto condPred = [&ctx](GSCondition* cond) { return cond->test->booleval(&ctx); };
+				if (!std::all_of(cmd->iconConditions.begin(), cmd->iconConditions.end(), iconPred) ||
+					!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), condPred))
+					return 1;
+				if (!std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), condPred))
+					return 2;
+				return 0;
+			});
 		lua.set_function("cancelCommand",
 			[this](const Command* cmd, int count) {
 				for (ClientGameObject* obj : selection)
@@ -6113,6 +6148,12 @@ void ClientInterface::iter()
 				const Vector3 ndc = centre.transformScreenCoords(cam.sceneMatrix);
 				g_mouseX = (int)((ndc.x + 1.0f) * g_windowWidth / 2.0f);
 				g_mouseY = (int)((-ndc.y + 1.0f) * g_windowHeight / 2.0f);
+			}
+			// ("mouse" with "hover": the camera over the object, the cursor where "mouse" says, e.g.
+			// on a HUD button)
+			if (const nlohmann::json mouse = bench.value("mouse", nlohmann::json()); mouse.is_array() && mouse.size() == 2) {
+				g_mouseX = mouse[0].get<int>();
+				g_mouseY = mouse[1].get<int>();
 			}
 		}
 		if (const std::string name = bench.value("stampdown", std::string()); !name.empty() && !stampdownBlueprint && client->clientPlayer) {

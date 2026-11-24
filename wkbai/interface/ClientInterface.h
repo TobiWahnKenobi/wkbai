@@ -280,6 +280,8 @@ private:
 	void controlGroupKeys();
 	// the selected (or hovered) character in the selection window, turning (after the HUD)
 	void drawSelectionPortrait();
+	// a selected formation's shape pad fills the selection window (ClientUIScript.lua)
+	bool formationPadShown() const;
 	// the lower left panel, its stained-glass window as refracting glass with enhanced graphics
 	void drawStainedGlassPanel(int x, int y, int w, int h);
 	std::vector<void*> glassFrames;

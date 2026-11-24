@@ -61,9 +61,9 @@
  },
  {
   "name": "hud-formation-buttons",
-  "what": "The four formation buttons at the bottom, Line pressed in",
+  "what": "The round formation pad in the selection panel's window (Column, Line, Wedge, Orb quarters), Line pressed in",
   "game": {
-   "note": "A Line formation of 12 spearmen selected"
+   "note": "A Line formation of the player's selected; crop to the lower left panel"
   }
  },
  {
