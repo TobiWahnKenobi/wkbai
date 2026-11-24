@@ -6,7 +6,7 @@ order: 90
 
 # Statistics and timeline
 
-Two windows of wkbai's own follow the game as it goes. Open and close them with **F6** and **F7**. You can move them and change their size.
+Two windows of wkbai's own follow the game as it goes. Open and close them with **F6** and **F7**, or with the [Statistics and Timeline buttons](top-bar.md#statistics-and-timeline) on the top bar. You can move them and change their size.
 
 ## Statistics
 

@@ -297,6 +297,40 @@ function drawTopButtons()
 		end
 		drawImage(x, y, bw, bh, image .. ".tga")
 	end
+	drawWindowButtons()
+end
+
+-- wkbai's own two buttons on the Celtic band left of Settings, in a stone slot of their own
+-- (tools/ui/top_bar_buttons.py draws them): Statistics (1) and Timeline (2), the windows F6 and
+-- F7 also open. Lit while the mouse is over them, sunken with a gold rim while the window is open.
+local windowButtons = {
+	{ "Statistics", 98, "Statistics: every player's resources, people, buildings and losses, with a graph" },
+	{ "Timeline", 157, "Timeline: the battles, sieges and raids of this game, told as a chronicle" },
+}
+
+function drawWindowButtons()
+	local s = topPanelScale()
+	drawImage(topPanelX(96), 18 * s, 117 * s, 18 * s, "Interface/InGame/Top Panel/Knot Slot.tga")
+	for i, b in ipairs(windowButtons) do
+		local x, y, bw, bh = topPanelX(b[2]), 20 * s, 56 * s, 14 * s
+		uiElement("top:" .. b[1], b[1], x, y, bw, bh, true)
+		local open, key = statsWindowButton(i)
+		local mx, my = getMouseX(), getMouseY()
+		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
+		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
+		if open then
+			image = image .. " Pressed"
+		elseif hovered then
+			image = image .. " Highlighted"
+		end
+		if hovered then
+			local tip = b[3]
+			if key ~= "" then tip = tip .. " (" .. key .. ")" end
+			setTooltip(tip)
+			if handleButton() == 1 then toggleStatsWindow(i) end
+		end
+		drawImage(x, y, bw, bh, image .. ".tga")
+	end
 end
 
 -- This function is executed every frame

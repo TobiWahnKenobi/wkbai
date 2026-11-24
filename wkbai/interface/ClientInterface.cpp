@@ -5492,6 +5492,16 @@ void ClientInterface::iter()
 		lua.set_function("hasObjectives", [this]() { return client->missionObjectives >= 0; });
 		lua.set_function("objectivesNews", []() { FrontEnd* fe = FrontEnd::get(); return fe && fe->objectivesNews(); });
 		lua.set_function("toggleObjectives", [this]() { toggleObjectivesRequested = true; });
+		// the top bar's Statistics (1) and Timeline (2) buttons: whether the window is open, the
+		// key that opens it too (F6, F7 unless changed; "" when none); and opening or closing it
+		lua.set_function("statsWindowButton", [this](int i) {
+			const KeyAction a = i == 2 ? KeyAction::Timeline : KeyAction::Statistics;
+			return std::make_tuple(i == 2 ? timelineOpen : statisticsOpen, GetKeyBinding(a, 0).text());
+		});
+		lua.set_function("toggleStatsWindow", [this](int i) {
+			bool& open = i == 2 ? timelineOpen : statisticsOpen;
+			open = !open;
+		});
 		// the top bar's Diplomacy (1), Global Diplomacy (2) and Tributes (3) buttons: enabled, news
 		// (it flashes), its tooltip; and its window opened or closed
 		lua.set_function("diplomacyButton", [this](int i) {
