@@ -13,7 +13,7 @@ What you can tell the selection to do appears as square buttons. Where they appe
 | Units or a formation | Their orders round the [selection panel's rim](#knuckle-buttons). |
 | A unit that can build (a peasant) | Also the [build menu](#build-menu) at the upper left. |
 | A building | Its [train and research columns](#train-and-research) at the upper left, and its other orders round the rim. |
-| A formation | Also the four [formation buttons](#formation-buttons) at the bottom. |
+| A formation | Also the round [formation pad](#formation-buttons) in the panel's window. |
 
 The buttons always belong to the **first** selected object. With several units selected, a button's order goes to every selected unit that has it.
 
@@ -85,6 +85,20 @@ When a building has an order for the units it makes (a rally point, or "go and c
 
 ## Formation buttons
 
-![The four formation buttons, a Line selected](shot:hud-formation-buttons)
+![The formation pad in the selection panel, a Line selected](shot:hud-formation-buttons)
 
-With a formation selected, four buttons sit at the bottom of the screen, right of the selection panel: **Line**, **Column**, **Wedge** and **Orb**. The one in use is pressed in. Click another to change the formation's shape; see [Formations](../../controls/formations.md#the-four-shapes).
+With a formation selected, the window of the [selection panel](selection-panel.md) holds the formation pad, as in the original game: a round pad split into four quarters, each showing its shape in dots.
+
+| Quarter | Shape |
+|---|---|
+| Top left | **Column**: dots in a vertical line |
+| Top right | **Line**: dots in a horizontal row |
+| Bottom left | **Wedge**: a triangle of dots |
+| Bottom right | **Orb**: a diamond of dots |
+
+- The quarter of the shape in use is pressed in (lighter).
+- Pointing at a quarter lights it and names its shape.
+- A quarter whose shape can't be taken now is grey; pointing at it says why (a ghost army can't change its shape).
+- Click a quarter to change the formation's shape; see [Formations](../../controls/formations.md#the-four-shapes).
+
+The formation's orders (Disband, Charge and the others) stay on the [knuckles](#knuckle-buttons) round the rim.

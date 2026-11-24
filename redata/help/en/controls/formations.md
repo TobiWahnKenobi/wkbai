@@ -19,7 +19,7 @@ They take their places, facing the way most of them faced. With fewer than 8, no
 
 ## The four shapes
 
-With a formation selected, the [formation buttons](../ui/hud/command-panel.md#formation-buttons) at the bottom change its shape:
+With a formation selected, the [formation pad](../ui/hud/command-panel.md#formation-buttons) in the selection panel's window changes its shape: Column top left, Line top right, Wedge bottom left, Orb bottom right.
 
 | Shape | Layout |
 |---|---|
