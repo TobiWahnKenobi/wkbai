@@ -1274,6 +1274,74 @@ float3 SkyAlong(float3 r)
 	return lerp(tex, FogTintDir(r), fog);
 }
 
+// The clouds in the water's mirror (RenderSettings::cloudReflections; the physical sky with its
+// volumetric clouds, CloudLightColour.w): the live sky's rings (SkyReflect) hold the sky greyed
+// evenly by the clouds' mean cover, no clouds' shapes, as the volumetric clouds are marched for
+// the screen's own view only. Here the mirror ray from world goes up to the cloud layer and takes
+// the cover there (CloudCover, as the ground's shadows: the same clouds, drifting with them).
+// The rings' colour m is split back into the clear sky and the clouds' colour (as the sky
+// renderer mixed them, CloudReflSun / CloudReflDir), and mixed again by that cover: white
+// clouds over the deep blue between them, thick ones darker beneath. Far out towards the horizon
+// (the clouds smaller than a pixel) and below it, the rings' mean as before.
+float3 WaterCloudsAlong(float3 world, float3 r, float3 m)
+{
+	if (CloudLightColour.w == 0 || FogSky[48].w == 0 || r.y < 0.005)
+		return m;
+	// The clouds' lower part, what is seen of them from below; down to the horizon, as the sky
+	// draws them. Looked up along the ray halfway to the flat water's mirror ray: the full
+	// ripples scattered the clouds into a fine grey noise (the waves still sway and break them).
+	float3 v = normalize(world - FogCamera.xyz);
+	float3 rc = normalize(lerp(r, float3(v.x, abs(v.y), v.z), 0.5));
+	float t = max(CloudShape.z + CloudShape.w * 0.3 - world.y, 1) / max(rc.y, 0.005);
+	float near = exp(-t / 25000) * smoothstep(0.005, 0.04, min(r.y, rc.y));
+	if (near < 0.02)
+		return m;
+	float2 xz = world.xz + rc.xz * t;
+	CloudAt(xz);
+	float lod = log2(max(t * 0.0012 / max(r.y, 0.05) * 256 * CloudScale.x, 1)) + 0.5;
+	float cc = CloudCover(xz, lod);
+	// (as the sky's clouds: they form where the cover is over about a quarter, the 3D shape's cells
+	// cutting their edges, here the cover noise's own cells; an overcast's relief all over, a
+	// storm's low deck in its thin parts too, the towers)
+	float cells = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.y + CloudWind.zw, lod).b;
+	float dens = lerp(smoothstep(0.2, 0.5, cc + (cells - 0.5) * 0.25), cc, saturate((cShape.x - 0.55) / 0.25));
+	dens = lerp(dens, saturate(cc * 1.4), cWeather.y);
+	if (CloudStorm.x > 0) {
+		float4 st = StormStage();
+		float2 cb = StormCells(xz, 0.9, lod, st.w * 0.05);
+		dens = max(dens, max(cb.x, cb.y * 0.75 * st.z) * st.y * StormRegion(cWeather.y));
+	}
+	// the rings' grey by the height (DiligentSkyRenderer: 0.5 at 4 degrees, 0.7 at 22, 0.85 at 50,
+	// 0.8 at the zenith) times their cover
+	float e = asin(saturate(r.y)) * 57.29578;
+	float g = e < 22 ? lerp(0.5, 0.7, saturate((e - 4) / 18)) : e < 50 ? lerp(0.7, 0.85, (e - 22) / 28) : lerp(0.85, 0.8, (e - 50) / 40);
+	float a = g * CloudReflSun.w;
+	// the clouds' colour (the rings'): the sky's grey inside them, the sun's light scattered
+	// forward towards it
+	float sd = saturate(dot(r, CloudReflDir.xyz));
+	float3 sunPart = CloudReflSun.rgb * (0.6 + 0.4 * sd * sd + 0.3 * pow(sd, 8));
+	float3 clear = m;
+	float3 cloudCol = (dot(m, float3(0.3, 0.59, 0.11)) + m) * CloudReflDir.w + sunPart;
+	if (a > 0.01) { // (the clear sky behind the mean: one step back from it)
+		clear = max((m - a * cloudCol) / max(1 - a, 0.15), 0);
+		cloudCol = (dot(clear, float3(0.3, 0.59, 0.11)) + clear) * CloudReflDir.w + sunPart;
+	}
+	// thick clouds darker beneath (their shadowed bases), thin ones lighter
+	cloudCol *= lerp(1.1, 0.78, saturate(cc * 1.2 - 0.2)) * lerp(1, 0.75, cWeather.y);
+	// (the difference from the rings' mean twice as strong: the water mirrors a tenth of the sky
+	// or less at the game's views, and the clouds at their own brightness hardly showed in it, a
+	// level or two; now they read as they do in a photograph of a lake)
+	float3 shaped = max(m + (lerp(clear, cloudCol, saturate(dens) * 0.95) - m) * 2.2, 0);
+	if (CloudLightColour.w > 1.5) // (the test hook WKBAI_CLOUD_REFLECT_TEST: the clouds in green, the gaps in red, the cover in blue)
+		return float3(1 - dens, dens, saturate(cc * 2)) * 3;
+	return lerp(m, shaped, near);
+}
+// The sky along r from the water at world: SkyAlong with the clouds (WaterCloudsAlong)
+float3 SkyAlongAt(float3 world, float3 r)
+{
+	return WaterCloudsAlong(world, r, SkyAlong(r));
+}
+
 // Reflections (from Low): the frame behind the water seen along the reflected ray. The ray
 // is marched in world units, the steps growing with the distance (jittered per pixel), and
 // projected; it hits where it passes behind the depth in the frame (by less than its step).
@@ -1443,7 +1511,7 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	// the sky in it and (High) the frame along the mirror ray (smooth ice mirrors; snow does not)
 	float3 r = reflect(-v, n);
 	float fresnel = (0.03 + 0.97 * pow(1 - saturate(dot(n, v)), 5)) * (1 - onIce);
-	float3 mirror = SkyAlong(r) * lerp(1, cloud, 0.5);
+	float3 mirror = SkyAlongAt(world, r) * lerp(1, cloud, 0.5);
 	if (q > 1.5) {
 		float4 seen = ScreenReflection(svpos, world, r);
 		mirror = lerp(mirror, seen.rgb, seen.a);
@@ -1492,7 +1560,7 @@ float3 FarSeaColour(float3 world, float4 svpos, bool trace, float4 seenIn, float
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v) + 0.06 * (1 - far)), 5);
 	float3 r = reflect(-v, n);
 	r.y = abs(r.y);
-	float3 sky = SkyAlong(r) * lerp(1, cloud, 0.5);
+	float3 sky = SkyAlongAt(world, r) * lerp(1, cloud, 0.5);
 	// (the far land's mountains mirrored in it: it had mirrored the sky alone, the play test of
 	// 2026-11-12)
 	float4 seen = trace ? ScreenReflection(svpos, world, r) : seenIn;
@@ -1603,7 +1671,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 sky = FogColor.rgb;
 	float foam = 0;
 	if (WaterSkyUp.w != 0) {
-		sky = SkyAlong(r);
+		sky = SkyAlongAt(input.World, r);
 		tex *= lerp(1.0, float3(0.55, 0.7, 0.8), saturate(input.Depth / 6));
 		float cloud = CloudLight(input.World) * lerp(0.35, 1, rtSun);
 		tex *= cloud;
@@ -1760,7 +1828,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	body += float3(0.04, 0.32, 0.28) * through * 0.55 * cloud;
 	body = MuddyWater(body, FreshShare(river, input.World));
 	float3 rr = reflect(-v, normalize(wn + (n - wn) * 0.35));
-	float3 sky = SkyAlong(rr) * lerp(1, cloud, 0.5);
+	float3 sky = SkyAlongAt(input.World, rr) * lerp(1, cloud, 0.5);
 	// the sun: a broad highlight off the waves, many small sparkles off the ripples
 	float sw = saturate(dot(reflect(-v, wn), l)), sr = saturate(dot(r, l));
 	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * lerp(2.2, 0.5, river)) * cloud * GlintLight();

@@ -46,6 +46,12 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 // 0-1) and how stormy (towers, anvils, dark bases 0-1), the density, the share of the sunlight
 // their shadows take, the light on them (1 a fair day's); the high clouds: cirrus and altocumulus
 // (0-1), and the altocumulus' form (0 floccus: scattered tufts, 1 stratiformis: a sheet of cells)
+// The clouds in the water's mirror (CloudBuffer's CloudReflSun and CloudReflDir): the sky
+// renderer's reflection rings' cloud colour (the sun's part, rgb), the cover they were greyed by,
+// the true sun, the sky's own colour's share; on while the physical sky and its clouds are drawn
+extern float g_cloudReflect[8];
+extern bool g_cloudReflectOn;
+
 struct CloudPreset { float cover, base, thickness, stratus, storm, density, shadow, light, cirrus, alto, altoSheet; };
 constexpr int CLOUD_WEATHER_COUNT = 10; // as the seasons' weather kinds (EnvWeather)
 extern const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT];

@@ -1781,6 +1781,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Screen-space water reflections (water Low or better)", &s.ssReflections);
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
+		ImGui::Checkbox("Clouds in the water (volumetric clouds, water Low or better)", &s.cloudReflections);
 	}
 	if (ImGui::CollapsingHeader("Terrain and grass")) {
 		{
