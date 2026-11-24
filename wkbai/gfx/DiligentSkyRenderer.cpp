@@ -69,7 +69,7 @@ float3 FogTintDir(float3 d)
 	d = normalize(d);
 	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
 	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
-	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	uint i0 = (uint)b & 31, i1 = (i0 + 1) & 31; // (unsigned: no sign fix-up, X3556)
 	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
 	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
 	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
@@ -491,7 +491,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 	// scattering by the density (below; the play test of 2026-11-17: Very high is the former Ultra)
 	// (all six light steps eroded and half again as many view steps cost twice High's pass for little more)
 	const int dl = (int)SkyStarY.w;
-	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 3 ? 5 : 4) / 4;
+	const int STEPS = ((q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 3 ? 5 : 4)) >> 2; // (a shift: no signed divide, X3556)
 	const int LIGHT_STEPS = q + 3;
 	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
 	// thickness: thin parts brighter, its relief)

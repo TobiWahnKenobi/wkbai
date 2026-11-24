@@ -137,7 +137,7 @@ float3 FogTintDir(float3 d)
 	d = normalize(d);
 	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
 	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
-	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	uint i0 = (uint)b & 31, i1 = (i0 + 1) & 31; // (unsigned: no sign fix-up, X3556)
 	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
 	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
 	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
@@ -165,7 +165,7 @@ float3 FogTint(float3 worldPos)
 // keep the sky box's light).
 float3 SkyRing(int ring, float b)
 {
-	int i0 = (int)b % 16, i1 = (i0 + 1) % 16;
+	uint i0 = (uint)b & 15, i1 = (i0 + 1) & 15;
 	return lerp(FogSky[ring * 16 + i0].rgb, FogSky[ring * 16 + i1].rgb, frac(b));
 }
 float3 SkyReflect(float3 d)
