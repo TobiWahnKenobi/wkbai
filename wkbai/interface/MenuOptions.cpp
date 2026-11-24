@@ -199,6 +199,9 @@ namespace {
 			[&rs]() { return rs.skyGI && rs.dynamicGI >= 3; }));
 		list.push_back(withEnabled(toggle("ssReflections", "water", "Screen-space water reflections", rs.ssReflections), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
 		list.push_back(withEnabled(toggle("rtReflections", "water", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
+		// the clouds' own shapes in the water's mirror (the volumetric clouds; WaterCloudsAlong)
+		list.push_back(withEnabled(toggle("cloudReflections", "water", "Clouds in the water", rs.cloudReflections),
+			[&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW && rs.dynamicClouds >= 3; }));
 		list.push_back(slider("terrainFresnel", "terrain", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
 		{
 			MenuOption o;
