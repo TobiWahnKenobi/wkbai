@@ -246,6 +246,10 @@ struct RenderSettings {
 	// the water's screen-space reflections (water Low or better): the frame behind the water seen
 	// along the mirror ray; off, the water mirrors the sky alone (and the ray-traced reflections)
 	bool ssReflections = true;
+	// the clouds in the water's mirror (the physical sky with its volumetric clouds, water Low or
+	// better): the cloud cover where the mirror ray meets the cloud layer, shaped as the clouds
+	// drawn in the sky; off, the water mirrors the sky's colours with the clouds' mean grey
+	bool cloudReflections = true;
 	// the reflections on buildings and units (models lit per pixel, enhanced renderers on
 	// Diligent): 0 Low, the sky and the ground along the reflected view; 1 High, with
 	// screen-space reflections (the frame before seen along the mirror ray; needs the

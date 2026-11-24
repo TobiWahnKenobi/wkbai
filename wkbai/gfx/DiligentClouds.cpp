@@ -65,6 +65,12 @@ cbuffer CloudBuffer
 	// the cumulonimbus' life (StormStage): x 0 none to 1 grown, y 1 growing, 0 decaying, z and w
 	// the storm layer's base and thickness
 	float4 CloudStorm;
+	// the clouds in the water's mirror (WaterCloudsAlong; RenderSettings::cloudReflections, the
+	// sky renderer's g_cloudReflect): the rings' cloud colour lit by the sun (rgb, for its
+	// forward scattering) and the cover they were greyed by (w); the true sun (xyz) and the cloud
+	// colour's share of the sky's own (w); CloudLightColour.w: 1 on
+	float4 CloudReflSun;
+	float4 CloudReflDir;
 };
 // how far the low clouds have drifted (world units, x and z): (6, 2) a second without the lobby's
 // wind (Wind.h), else along it by its mean speed (UpdateCloudBuffer)
@@ -636,7 +642,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 352;
+	cb.Size = 384;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -757,6 +763,8 @@ static Vector3 s_frontDir(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
 // mean speed integrated, so a change of the wind never jumps them
 static double s_cloudUV[4] = {}, s_cloudDrift[2] = {};
 static float s_cloudTime = -1.0f;
+float g_cloudReflect[8] = {};
+bool g_cloudReflectOn = false;
 
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
 {
@@ -1032,7 +1040,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		s_cloudDrift[1] = time * 2.0;
 	}
 	s_cloudTime = time;
-	const float data[88] = {
+	// (test hook WKBAI_CLOUD_REFLECT_TEST: WaterCloudsAlong draws the clouds' cover it finds in false colours)
+	static const bool cloudReflectTest = getenv("WKBAI_CLOUD_REFLECT_TEST") != nullptr;
+	const float data[96] = {
 		cloudUV[0], cloudUV[1], cloudUV[2], cloudUV[3],
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -1053,10 +1063,12 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		env.giMapOrigin[0], env.giMapOrigin[1], 1.0f / DiligentGfx::ShadowEnvironment::GI_EXTENT, (float)env.giMode,
 		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), (float)s_cloudDrift[0], (float)s_cloudDrift[1], 0.0f,
 		lightDir.x, lightDir.y, lightDir.z, 1.0f,
-		lightCol[0], lightCol[1], lightCol[2], 0.0f,
+		lightCol[0], lightCol[1], lightCol[2], g_cloudReflectOn && rs.cloudReflections ? (cloudReflectTest ? 2.0f : 1.0f) : 0.0f,
 		env.stormLife, env.stormGrowing ? (stormTestAnywhere || env.stormSteady ? 2.0f : 1.0f) : 0.0f, env.stormBase, env.stormThickness,
+		g_cloudReflect[0], g_cloudReflect[1], g_cloudReflect[2], g_cloudReflect[3],
+		g_cloudReflect[4], g_cloudReflect[5], g_cloudReflect[6], g_cloudReflect[7],
 	};
-	static_assert(sizeof(data) <= 352, "the cloud buffer's size (CreateCloudResources)");
+	static_assert(sizeof(data) <= 384, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }

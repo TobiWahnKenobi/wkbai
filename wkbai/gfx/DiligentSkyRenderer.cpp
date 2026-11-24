@@ -1385,6 +1385,7 @@ struct DiligentSkyRenderer::Impl {
 	float tintCover = -1, horizon[32][4] = {}, sunColour[3] = {};
 	Vector3 reflSun = Vector3(0, -2, 0), reflMoon = Vector3(0, -2, 0);
 	float reflCover = -1, reflNight = -1, reflMoonShows = -1, reflSky[50][4] = {};
+	float reflClouds[8] = {}; // (g_cloudReflect, as worked out with reflSky)
 	int reflModel = -1;
 	const Camera* camera;
 	texture faces[6] = {};
@@ -1826,6 +1827,7 @@ void DiligentSkyRenderer::render()
 	// model, only when the sun, the moon, the clouds or the night changed (sky-fresnel,
 	// 2026-11-10): no cube map, no ray tracing.
 	env.fogSky[48][3] = 0.0f;
+	g_cloudReflectOn = false;
 	if (clouds) {
 		Vector3 sunTrue = ev.active ? ev.sunWorld : env.sunDirection;
 		sunTrue = sunTrue.sqlen3() > 0.01f ? sunTrue.normal() : Vector3(0.5f, 0.8f, 0.3f).normal();
@@ -1859,6 +1861,15 @@ void DiligentSkyRenderer::render()
 					// (mapped softer than the sun's disc: the deck salmon and red at sunset, not yellow)
 					cloudSun[i] = (1.0f - std::exp(-8.0f * trans[i])) * lit * (1.0f - 0.45f * cover * cover);
 			}
+			// (the same cloud colour per pixel of the water, with the cover where its mirror
+			// ray meets the clouds: WaterCloudsAlong, RenderSettings::cloudReflections)
+			for (int i = 0; i < 3; i++)
+				m.reflClouds[i] = cloudSun[i] * 0.8f * (0.5f + 0.5f * k);
+			m.reflClouds[3] = cover;
+			m.reflClouds[4] = sunTrue.x;
+			m.reflClouds[5] = sunTrue.y;
+			m.reflClouds[6] = sunTrue.z;
+			m.reflClouds[7] = 0.45f * (0.5f + 0.5f * k);
 			auto one = [&](const Vector3& d, float grey, float* v) {
 				PhysicalSkyCpu(d, sunTrue, v);
 				// (the sky's glow round the sun with the same soft knee as the haze's horizon)
@@ -1900,6 +1911,8 @@ void DiligentSkyRenderer::render()
 			}
 		}
 		memcpy(env.fogSky, m.reflSky, sizeof(m.reflSky));
+		memcpy(g_cloudReflect, m.reflClouds, sizeof(m.reflClouds));
+		g_cloudReflectOn = true;
 		// the ground below the horizon: the sky light's (the box's below or the horizon's half),
 		// as dark as the night's ambient
 		for (int i = 0; i < 3; i++)
