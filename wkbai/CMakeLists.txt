@@ -109,7 +109,7 @@ add_executable (wkbai "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lzr
 "matchmaking/LocalService.cpp" "matchmaking/NakamaService.cpp" "matchmaking/PluginService.cpp" "matchmaking/HttpClient.h" "matchmaking/HttpClient.cpp" "matchmaking/wkbai_mm_plugin.h")
 # test.cpp (every built-in test) has outgrown an object file's 65,536 sections (MSVC C1128)
 if(MSVC)
-  set_source_files_properties(test.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+  set_source_files_properties(test.cpp interface/ClientInterface.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 target_link_libraries (wkbai
   imgui
@@ -181,6 +181,12 @@ add_custom_target(wkbai_buildinfo
   COMMENT "wkbai build info")
 add_dependencies(wkbai wkbai_buildinfo)
 target_include_directories(wkbai PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# a sampling heap profiler (util/HeapProfile.cpp; WKB_HEAPPROF=<file> writes its reports): -DWKBRE2_HEAPPROF=ON
+option(WKBRE2_HEAPPROF "Build with the sampling heap profiler" OFF)
+target_sources(wkbai PRIVATE "util/HeapProfile.cpp")
+if(WKBRE2_HEAPPROF)
+  target_compile_definitions(wkbai PRIVATE WKBRE2_HEAPPROF=1)
+endif()
 # "official" builds come from the release workflow alone: -DWKBAI_OFFICIAL_BUILD=ON
 option(WKBAI_OFFICIAL_BUILD "A release workflow's build" OFF)
 if(WKBAI_OFFICIAL_BUILD)

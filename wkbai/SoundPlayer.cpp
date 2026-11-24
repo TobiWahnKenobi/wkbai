@@ -484,6 +484,14 @@ struct OALSoundPlayer : SoundPlayer {
 		alGenBuffers(1, &musicBuffer);
 		alBufferData(musicBuffer, (mChannels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, samples, numSamples * mChannels * 2, mRate);
 		delete [] samples;
+		// the decoder and the file's bytes: done with once the samples are in the buffer (each
+		// track had kept its own for good)
+		mpg123_close(mHandle);
+		mpg123_delete(mHandle);
+		mHandle = nullptr;
+		free(streamBytes);
+		streamBytes = streamPtr = nullptr;
+		streamSize = 0;
 
 		alSourcei(musicSource, AL_BUFFER, musicBuffer);
 		alSourcei(musicSource, AL_SOURCE_RELATIVE, AL_TRUE);

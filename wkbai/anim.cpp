@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include <cstdlib>
+#include <memory>
 #include "anim.h"
 #include <atomic>
 #include "util/BinaryReader.h"
@@ -14,6 +16,7 @@ std::atomic<int> g_diag_animHits = 0, g_diag_animMisses = 0;
 void Anim::load(const char *filename) {
 	char *fcnt; int fsize;
 	LoadFile(filename, &fcnt, &fsize);
+	const std::unique_ptr<char, decltype(&free)> file(fcnt, &free); // (read into the members, freed on the way out)
 	BinaryReader br(fcnt);
 	std::string sign = br.readString(4);
 	if (sign != "Anim")

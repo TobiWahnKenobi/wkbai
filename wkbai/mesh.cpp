@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include <cstdlib>
+#include <memory>
 #include "mesh.h"
 #include "file.h"
 #include "util/BinaryReader.h"
@@ -60,6 +62,7 @@ void Mesh::loadMesh3(const char* filename)
 {
 	char *fcnt; int fsize;
 	LoadFile(filename, &fcnt, &fsize);
+	const std::unique_ptr<char, decltype(&free)> file(fcnt, &free); // (read into the members, freed on the way out)
 	BinaryReader br(fcnt);
 	exactNormals.clear();
 	smokeEmitters.clear();

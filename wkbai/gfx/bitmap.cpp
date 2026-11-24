@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <memory>
 #include <cmath>
 #include <algorithm>
 // wkbre2 - WK Engine Reimplementation
@@ -53,6 +55,8 @@ Bitmap Bitmap::loadBitmapExact(const char *fn)
 	char *d; int s;
 	const char *e = strrchr(fn, '.');
 	LoadFile(fn, &d, &s);
+	// (the loaders copy what they keep: the file's bytes freed on the way out)
+	const std::unique_ptr<char, decltype(&free)> file(d, &free);
 	if(!StrCICompare(e, ".tga"))
 		return loadTGA(d, s);
 	if(!StrCICompare(e, ".pcx"))

@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include <cstdlib>
+#include <memory>
 #include "TrnTextureDb.h"
 #include "file.h"
 #include "util/GSFileParser.h"
@@ -17,6 +19,7 @@ void TerrainTextureDatabase::load(const char * filename)
 {
 	char *file; int filesize;
 	LoadFile(filename, &file, &filesize, 1);
+	const std::unique_ptr<char, decltype(&free)> fileBytes(file, &free); // (parsed into the groups, freed on the way out)
 	file[filesize] = 0;
 	GSFileParser parser(file);
 
