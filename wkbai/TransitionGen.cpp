@@ -33,6 +33,17 @@ namespace {
 		h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
 		return h;
 	}
+	// a picture's fingerprint: FNV-1a over its pixels (the stamp: a source replaced under the same
+	// name and size, a mod's, is noticed; the name and size alone had missed it)
+	template <class A, class B> std::string Fingerprint(const A& a, const B& b)
+	{
+		uint64_t h = 1469598103934665603ull;
+		for (size_t i = 0; i < a.size(); i++) { h ^= a[i]; h *= 1099511628211ull; }
+		for (size_t i = 0; i < b.size(); i++) { h ^= b[i]; h *= 1099511628211ull; }
+		char buf[20];
+		snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h);
+		return buf;
+	}
 	float Unit(uint32_t h) { return (h >> 8) * (1.0f / 16777216.0f); }
 	// value noise on a lattice, smooth between
 	float Noise(float x, float y, uint32_t s)
@@ -218,7 +229,7 @@ namespace {
 				if (!LoadAtlas(c.file, a)) return false;
 				Bitmap bm;
 				if (!LoadBump(c.file, bm)) return false;
-				sources.push_back({ { "file", a.source }, { "size", a.bmp.width } });
+				sources.push_back({ { "file", a.source }, { "size", a.bmp.width }, { "pixels", Fingerprint(a.bmp.pixels, bm.pixels) } });
 				atlases.emplace(c.file, std::move(a));
 				bumps.emplace(c.file, std::move(bm));
 			}

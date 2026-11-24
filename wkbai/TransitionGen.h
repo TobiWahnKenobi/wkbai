@@ -14,7 +14,9 @@
 // <A>-<B>_BumpMap.png (8-bit heights, 256 pixels, as the game's bump maps), in the user folder's
 // saved\Maps\Map_Textures (the file system finds them there after the archives).
 // They are made again when the generator's version, the pair list's version or a source picture
-// (the HD pack switched on or off) changes; the same inputs give the same pictures everywhere.
+// changes: its name, size or pixels (the HD pack switched on or off; a mod's pictures under the
+// game's names, a fingerprint of the colours and heights in the stamp); the same inputs give the
+// same pictures everywhere.
 // Each picture carries its corners' groups (TerrainTexture::genCorners): the solver needs no edge
 // rules for them. The RE repo's docs/engine/map-authoring.md, "Generated transitions".
 
