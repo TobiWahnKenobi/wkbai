@@ -959,6 +959,39 @@ std::vector<uint8_t> BuildWaveRegions(Terrain* terrain, const std::vector<uint8_
 	return out;
 }
 
+std::vector<uint8_t> BuildDesignedCurrent(const Terrain* terrain)
+{
+	const int W = (int)terrain->width, H = (int)terrain->height;
+	std::vector<uint8_t> out((size_t)W * H, 0);
+	const WaterDesign* design = terrain->waterDesign.get();
+	if (!design || std::none_of(design->waterways.begin(), design->waterways.end(), [](const WaterDesign::Waterway& w) { return w.hasSpeed(); }))
+		return out;
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			if (!terrain->getTile(x, z)->fullOfWater)
+				continue;
+			const float ms = design->designedSpeed((x - (int)terrain->edge + 0.5f) * 5.0f, (z - (int)terrain->edge + 0.5f) * 5.0f);
+			if (ms > 0.0f)
+				out[(size_t)z * W + x] = (uint8_t)std::clamp((int)std::lround(ms * 20.0f), 1, 255);
+		}
+	// one tile onto the land (the most of its water neighbours)
+	std::vector<uint8_t> spread = out;
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			if (out[(size_t)z * W + x])
+				continue;
+			uint8_t best = 0;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int ax = x + dx, az = z + dz;
+					if (ax >= 0 && az >= 0 && ax < W && az < H)
+						best = std::max(best, out[(size_t)az * W + ax]);
+				}
+			spread[(size_t)z * W + x] = best;
+		}
+	return spread;
+}
+
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 {
 	const int W = (int)terrain->width, H = (int)terrain->height;
@@ -1168,7 +1201,10 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 			if (onWay && (c == WaterDesign::AUTO || c == WaterDesign::RIVER)) {
 				dirX[t] = wx;
 				dirZ[t] = wz;
-				speed[t] = std::clamp((8.0f - shore[t]) / 5.0f, 0.45f, 1.0f);
+				// (its designed current where it has one: 2.5 m/s and more full flow; else by the
+				// distance to the shore)
+				const float ms = design->designedSpeed((x - terrain->edge + 0.5f) * 5.0f, (z - terrain->edge + 0.5f) * 5.0f);
+				speed[t] = ms > 0.0f ? std::clamp(ms / 2.5f, 0.2f, 1.0f) : std::clamp((8.0f - shore[t]) / 5.0f, 0.45f, 1.0f);
 				river[t] = 1.0f;
 				designed++;
 			}

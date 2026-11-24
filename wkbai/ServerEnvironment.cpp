@@ -382,10 +382,10 @@ void ServerEnvironment::prepareCurrents(Server& server)
 			c.depth = (uint8_t)std::clamp((int)std::lround(depth / 0.02f), 0, 255);
 			// (a waterway of the map's water design with its own speed: that)
 			if (const WaterDesign* design = t->waterDesign.get(); design && !design->waterways.empty()) {
-				float dx, dz, dist, toMouth;
-				const int ww = design->nearestWaterway(x * 5.0f + 2.5f, z * 5.0f + 2.5f, dx, dz, dist, toMouth);
-				if (ww >= 0 && design->waterways[ww].speed > 0.0f)
-					c.designed = (uint8_t)std::clamp((int)std::lround(design->waterways[ww].speed * 10.0f), 1, 255);
+				// (its points' own speeds along it, where it has them)
+				const float ms = design->designedSpeed(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
+				if (ms > 0.0f)
+					c.designed = (uint8_t)std::clamp((int)std::lround(ms * 10.0f), 1, 255);
 			}
 			if (depth <= 1.5f)
 				currentTiles.push_back(z * w + x);

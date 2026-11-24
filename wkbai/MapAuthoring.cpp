@@ -12,6 +12,7 @@
 #include "Environment.h"
 #include "TrnTextureDb.h"
 #include "WaterDesign.h"
+#include "MapWater.h"
 #include "gfx/bitmap.h"
 #include "gameset/gameset.h"
 #include "gameset/Footprint.h"
@@ -530,6 +531,18 @@ namespace {
 	}
 }
 
+// a map folder's sea level (its map.json), -1e30 for any other map
+static float SeaLevelFor(const std::string& map)
+{
+	std::error_code ec;
+	const std::filesystem::path mj = std::filesystem::u8path(map) / "map.json";
+	if (!std::filesystem::is_regular_file(mj, ec))
+		return -1e30f;
+	std::ifstream f(mj, std::ios::binary);
+	const json j = json::parse(f, nullptr, false);
+	return j.is_discarded() ? -1e30f : MapWater::SeaLevelOf(j);
+}
+
 bool Describe(const std::string& map, const std::string& png, json& out, std::string& error)
 {
 	const std::string level = LevelPath(map, error);
@@ -625,7 +638,12 @@ bool Describe(const std::string& map, const std::string& png, json& out, std::st
 			json pts = json::array();
 			for (const Vector3& p : w.points)
 				pts.push_back({ p.x, p.z });
-			ways.push_back({ { "points", pts }, { "lengthM", len }, { "widthM", w.width }, { "speedMs", w.speed } });
+			json way = { { "points", pts }, { "lengthM", len }, { "widthM", w.width }, { "speedMs", w.speed } };
+			if (!w.speeds.empty())
+				way["speedsMs"] = w.speeds;
+			if (w.sloped())
+				way["sloped"] = true;
+			ways.push_back(way);
 		}
 		json falls = json::array();
 		for (const WaterDesign::PlacedFall& f : wd->waterfalls)
@@ -641,6 +659,13 @@ bool Describe(const std::string& map, const std::string& png, json& out, std::st
 	}
 	else
 		water["design"] = nullptr;
+	// the checks by intent (MapWater.h: leaks, puddles, rising and dry rivers, the falls drawn,
+	// the rivers leaving the map, the far-land hints), as the compiler's report has them
+	{
+		std::vector<std::string> ww;
+		water["checks"] = MapWater::Check(*t, SeaLevelFor(map), ww);
+		water["checks"]["warnings"] = ww;
+	}
 	out["water"] = water;
 
 	// the materials: texture groups and terrains over the playable tiles
