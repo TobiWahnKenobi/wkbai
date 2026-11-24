@@ -1,18 +1,29 @@
 ---
 title: Top bar
-ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line, ui/hud/wind#wind-gauge, ui/hud/wind-gauge#wind-gauge, ui/hud/top-bar/mission-objectives#mission-objectives]
+ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line, ui/hud/wind#wind-gauge, ui/hud/wind-gauge#wind-gauge, ui/hud/top-bar/mission-objectives#mission-objectives, ui/hud/top-bar/statistics#statistics-and-timeline, ui/hud/top-bar/timeline#statistics-and-timeline]
 order: 20
 ---
 
 # Top bar
 
-![The top bar: five buttons at the left, the resources at the right](shot:hud-top-bar)
+![The top bar: seven buttons at the left, the resources at the right](shot:hud-top-bar)
 
 The bar across the top has two halves. The **buttons** sit at its left end, the **resources** at its right end, and a band of Celtic knotwork fills the space between them on a wide screen.
 
-## The buttons
+## Statistics and Timeline
 
-Five small buttons, from left to right. A button is **greyed** when it can't be used; clicking a grey one does nothing (the click doesn't go through to the battlefield either). A button **flashes** when there is something new in its window, until you open it. Each tooltip says what the button does, or why it is grey.
+Two buttons of wkbai's own sit on the knotwork left of the five, in a stone slot of their own:
+
+- **Statistics** (a bar chart) opens the [statistics window](chronicle.md#statistics), as **F6** does;
+- **Timeline** (an hourglass) opens the [timeline](chronicle.md#timeline), as **F7** does.
+
+A button lights up under the mouse, and stays **pressed in**, with a gold rim, while its window is open. Click it again (or press the key) to close the window. The tooltip names the key, as set in the [key bindings](help:controls/keys/rebind).
+
+> wkbai: the original had no statistics or timeline during a game; the space held only knotwork.
+
+## The five buttons
+
+The original's five small buttons, from left to right. A button is **greyed** when it can't be used; clicking a grey one does nothing (the click doesn't go through to the battlefield either). A button **flashes** when there is something new in its window, until you open it. Each tooltip says what the button does, or why it is grey.
 
 ### Settings
 
