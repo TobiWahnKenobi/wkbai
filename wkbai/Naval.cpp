@@ -2244,6 +2244,11 @@ namespace Naval {
 		return RegionNear(c, home->position);
 	}
 
+	int LandRegionAt(int cls, const Vector3& place)
+	{
+		return Srv()->terrain ? RegionNear(cls, place) : -1;
+	}
+
 	const std::vector<int>& PeasantRegions(ServerGameObject* player, int* cls)
 	{
 		struct Cache { uint64_t game = 0; float at = -1.0f; int cls = -1; std::vector<int> regions; };

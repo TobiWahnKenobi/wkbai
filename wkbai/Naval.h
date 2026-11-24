@@ -136,6 +136,8 @@ namespace Naval {
 	// the land region of the player's home (its palace, else its first building) for a Peasant's
 	// movement class (set in cls); -1 when it has none
 	int HomeLandRegion(ServerGameObject* player, int* cls);
+	// the land region at (or within 4 tiles of) a place for a movement class; -1 when none
+	int LandRegionAt(int cls, const Vector3& place);
 	// the land regions (a Peasant's class, set in cls) where the player has peasants (its home's
 	// too), sorted; looked up again once a game second
 	const std::vector<int>& PeasantRegions(ServerGameObject* player, int* cls);
