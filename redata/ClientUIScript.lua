@@ -300,17 +300,20 @@ function drawTopButtons()
 	drawWindowButtons()
 end
 
--- wkbai's own two buttons on the Celtic band left of Settings, in a stone slot of their own
--- (tools/ui/top_bar_buttons.py draws them): Statistics (1) and Timeline (2), the windows F6 and
--- F7 also open. Lit while the mouse is over them, sunken with a gold rim while the window is open.
+-- wkbai's own two buttons on the Celtic band left of Settings (tools/ui/top_bar_buttons.py draws
+-- them): Statistics (1) and Timeline (2), the windows F6 and F7 also open. Lit while the mouse is
+-- over them and while the window is open (the original's buttons have no pressed look). Their
+-- rail is the original's own: the panel's strip from the slanted end left of Settings to the
+-- divider after Mission Objectives (x 196-338: studded rims, stone, dividers) drawn again 120 pixels further left, so the rail
+-- starts on the knotwork and runs into Settings' slot with a divider between them.
 local windowButtons = {
 	{ "Statistics", 98, "Statistics: every player's resources, people, buildings and losses, with a graph" },
-	{ "Timeline", 157, "Timeline: the battles, sieges and raids of this game, told as a chronicle" },
+	{ "Timeline", 158, "Timeline: the battles, sieges and raids of this game, told as a chronicle" },
 }
 
 function drawWindowButtons()
 	local s = topPanelScale()
-	drawImage(topPanelX(96), 18 * s, 117 * s, 18 * s, "Interface/InGame/Top Panel/Knot Slot.tga")
+	drawImagePart(topPanelX(76), 16 * s, 142 * s, 26 * s, topPanel, 196 / 1024, 16 / 85, 338 / 1024, 42 / 85)
 	for i, b in ipairs(windowButtons) do
 		local x, y, bw, bh = topPanelX(b[2]), 20 * s, 56 * s, 14 * s
 		uiElement("top:" .. b[1], b[1], x, y, bw, bh, true)
@@ -318,9 +321,7 @@ function drawWindowButtons()
 		local mx, my = getMouseX(), getMouseY()
 		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
 		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
-		if open then
-			image = image .. " Pressed"
-		elseif hovered then
+		if open or hovered then
 			image = image .. " Highlighted"
 		end
 		if hovered then
