@@ -17,7 +17,7 @@ How the water is drawn. A click takes the next level.
 - **Original:** the original's water: two layers of the map's water texture scrolling over each other.
 - **Off:** a plain colour.
 - **Very low:** the water texture with rippling waves and the sun's glint.
-- **Low:** also the sky reflected in it, deeper water darker, cloud shadows, foam along the shores, different looks for rivers and the sea, and short reflections of the land.
+- **Low:** also the sky reflected in it (with [volumetric clouds](sky-weather.md#clouds), the clouds' own shapes and storm cells too, on lakes, the sea and the ice; off with [`cloudReflections`](../config-file.md#cloudreflections)), deeper water darker, cloud shadows, foam along the shores, different looks for rivers and the sea, and short reflections of the land.
 - **Medium:** the open sea's look of High on a flat surface, with longer reflections.
 - **High** (the default): the surface itself moves with waves, with foam on the crests and in the surf. Needs a graphics card that can tessellate; without one it looks as Medium.
 - **Very high:** between High and Ultra.
