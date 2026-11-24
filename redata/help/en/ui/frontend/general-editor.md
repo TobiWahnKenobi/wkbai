@@ -17,7 +17,7 @@ The picture shown for the general in the lobby and in its messages during a game
 
 ## Name
 
-The general's name, up to 32 characters. It is also the file name, so the characters a file name can't hold are ignored. Save AI General needs a name.
+The general's name, up to 32 characters: click the box and type it (it is empty for a new general). It is also the file name, so the characters a file name can't hold are ignored. Save AI General needs a name.
 
 ## Category
 
@@ -57,7 +57,7 @@ Seven more sliders, for how the general treats the other players when diplomacy 
 
 ## Your generals
 
-The button above the background shows the general being edited: **New AI General** for a new one, or the name of one you made before. A click steps through the generals you made, loading each one's values to change them. It is grey until you have saved one.
+The button left of Delete steps through the generals you made, loading each one's values to change them. It shows the name of the general being edited, or **Your generals (n)** with how many you made while you edit a new one. It reads **Your generals: none yet** and is grey until you have saved one.
 
 ## Delete
 
@@ -69,7 +69,7 @@ Starts a new general: every slider back to 50, the first portrait, Veteran, Rena
 
 ## Background
 
-The general's story, up to 200 characters. The skirmish lobby shows it beside the portrait when the general is chosen or under the mouse.
+The long box above Save AI General: the general's story, up to 200 characters, optional. The skirmish lobby shows it beside the portrait when the general is chosen or under the mouse.
 
 ## Save AI General
 

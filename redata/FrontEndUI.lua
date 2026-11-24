@@ -310,6 +310,8 @@ local function textField(state, x, y, w, h, refused, maxLength)
 	local tw = textWidth(FONT_TEXT, shown, S)
 	if tw > w - L(20) then tx = x + w - L(12) - tw end
 	drawText(FONT_TEXT, tx, ty, shown, YELLOW, S)
+	-- state.hint: what goes in the field, greyed while it is empty
+	if state.text == "" and state.hint then drawText(FONT_TEXT, tx + L(6), ty, state.hint, 0xFF9A8A78, S) end
 	if focused and math.floor(getTime() * 2) % 2 == 0 then
 		drawRect(tx + tw + L(1), ty + L(2), L(2), th - L(4), YELLOW)
 	end
@@ -2809,7 +2811,9 @@ local GE_DIPLOMATIC = {
 local GE_CATEGORIES = { "CONSCRIPT", "VETERAN", "ELITE" }
 local GE_ALIGNMENTS = { "Pagan", "Renaissance", "Imperial" }
 
-local editor = { name = { text = "" }, background = { text = "" }, stats = {}, portrait = 1, category = 2, alignment = 2, editing = 0 }
+local editor = { name = { text = "", hint = "Type the general's name" },
+	background = { text = "", hint = "The general's story, shown in the skirmish lobby (optional)" },
+	stats = {}, portrait = 1, category = 2, alignment = 2, editing = 0 }
 
 local function editorPortraits()
 	local list = {}
@@ -2910,7 +2914,9 @@ Screens.generaleditor = {
 		-- the generals made before: pick one to change it
 		local custom = customGenerals()
 		local current = custom[editor.editing]
-		if button(current and current.name or T("FRONT_END_GENERAL_CREATION_NEW_GENERAL"), px(174), py(375), pl(200), pl(22), #custom > 0) then
+		-- (its own text, not New AI General's: the button next to Delete is that one)
+		if button(current and current.name or (#custom > 0 and ("Your generals (" .. #custom .. ")") or "Your generals: none yet"),
+				px(174), py(375), pl(200), pl(22), #custom > 0) then
 			editor.editing = (editor.editing + 1) % (#custom + 1)
 			editorLoad(custom[editor.editing])
 		end
@@ -2928,7 +2934,9 @@ Screens.generaleditor = {
 		end
 
 		-- background
-		drawText(FONT_LIST, px(10), py(409), T("FRONT_END_GENERAL_CREATION_BACKGROUND"), WHITE, S)
+		-- (its label beside the field, not at the panel's edge)
+		drawText(FONT_LIST, px(174) - textWidth(FONT_LIST, T("FRONT_END_GENERAL_CREATION_BACKGROUND"), S) - L(10), py(409),
+			T("FRONT_END_GENERAL_CREATION_BACKGROUND"), WHITE, S)
 		textField(editor.background, px(174), py(405), pl(425), pl(25), nil, 200)
 
 		local testSave = editor.testSave
