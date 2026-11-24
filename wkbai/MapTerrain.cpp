@@ -2287,6 +2287,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			}
 		}
 		int raised = 0, tooLow = 0;
+		json lowAt = json::array();
 		float most = 0;
 		for (int z = 0; z < gh; z++)
 			for (int x = 0; x < gw; x++) {
@@ -2300,13 +2301,20 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 				if (levee <= g.v[k]) continue;
 				// (a raise of more than 0.75 m: land falling away beside the river, not a flat it
 				// stands over; left as it is, else a dyke metres high: 4.9 m on Snowdonia)
-				if (levee - g.v[k] > 0.75f) { tooLow++; continue; }
+				if (levee - g.v[k] > 0.75f) {
+					// (where: playable metres, every 50th, for a look at them)
+					if (tooLow++ % 50 == 0 && lowAt.size() < 40) {
+						const V2 p = m.pos(x, z);
+						lowAt.push_back({ std::round(p.x * 10) / 10, std::round(p.z * 10) / 10, std::round((levee - g.v[k]) * 100) / 100 });
+					}
+					continue;
+				}
 				most = std::max(most, levee - g.v[k]);
 				g.v[k] = levee;
 				raised++;
 			}
-		riverBanksJ = { { "verticesRaised", raised }, { "mostM", std::round(most * 100) / 100 }, { "leftLow", tooLow },
-			{ "about", "land beside a river lower than its water raised into a low levee (1 in 16 from the channel's half width, at most 0.5 m over the water, at most 0.75 m raised: leftLow, land lower than that, left as it is), so the water ends along the course rather than on the tile grid" } };
+		riverBanksJ = { { "verticesRaised", raised }, { "mostM", std::round(most * 100) / 100 }, { "leftLow", tooLow }, { "leftLowAt", lowAt },
+			{ "about", "land beside a river lower than its water raised into a low levee (1 in 16 from the channel's half width, at most 0.5 m over the water, at most 0.75 m raised: leftLow, land lower than that, left as it is; leftLowAt: every 50th of them, [x, z, m short] in playable metres), so the water ends along the course rather than on the tile grid" } };
 		if (raised) printf("Terrain: river banks raised over the water at %d vertices (at most %.2f m)\n", raised, most);
 	}
 	timing["details"] = Ms(t1);
