@@ -56,7 +56,7 @@ The AI of *Warrior Kings: Battles* is mostly game-set script, the "Kingmaker" AI
 
 The General becomes a government of departments (economy, labour, builders, research, war, intelligence, diplomacy, and at sea an admiralty) under a strategist, on top of the Kingmaker scripts. It acts only on what its units have seen.
 
-- **War:** its war department sends its Generals on missions: raze a town, kill peasants, tie the enemy down. It defends its own towns and peasants first and calls up militia when attacked. In the opening it keeps its new peasants at home until its home guard stands.
+- **War:** its war department sends its Generals on missions: raze a town, kill peasants, tie the enemy down. It defends its own towns and peasants first and calls up militia when attacked; archers firing as they fall back count as free to defend. An enemy army landing anywhere on its home island makes its guard bigger, and brings its missions home when the landing is stronger than what is at home. In a game of two, the opening keeps its new peasants at home until its home guard stands; with three or more players it doesn't hold them back.
 - **Night attacks:** with peasant lodging, when the peasants have gone indoors for the night (its own and so its enemies'), it sends no raids on peasants but attacks sooner and with a smaller lead.
 - **Building:** it keeps its building sites about 275 m clear of an enemy's palace, and lays no village on land its peasants can't walk to.
 - **Diplomacy:** it remembers. What it loses to a player leaves a grudge (twice as deep from a player it trusted), and tribute from a player leaves gratitude; both fade over some minutes. A deep grudge leads to war and draws its attacks; trust brings peace offers and alliances, and offers to it are accepted when it trusts you enough. A treacherous General may break an alliance with one it doesn't trust ([diplomacy](diplomacy.md)).
@@ -68,6 +68,9 @@ The General becomes a government of departments (economy, labour, builders, rese
 Every AI (the Kingmaker scripts, Aggressive AI, a Lua AI and the ministry AI) reads the map. Where water lies between it and its enemies, and the sea is the shorter way or the only one, it builds a [Dock](../buildings/dock-wood.md), trains [Cogs](../units/cog.md) and war boats, ferries its armies over, lands them at a safe shore, regroups and attacks. Its war boats fight enemy ships, go for enemy docks and shoot at the coast.
 
 - **Colonies:** an AI may settle other islands for their resources. It either builds a Manor of its own on the island, where it is allowed to and the island holds enough to repay it, or opens a supply route by sea: the island village's cart to a dock, a Cog to the home dock, a cart to the Manor ([supply lines](../commands/set-up-oversea-supply-route.md)).
+- **Settlers at sea:** they board a Cog that has stopped near them, and the Cog sails close in to the shore for those still waiting; if it can't, they walk to the shore by it. War boats sail with the settlers' Cog, and after settlers have been lost at an island, none go there again without two war boats.
+- **A Castle sooner:** where an island is worth a Manor but the AI may not build one yet, it puts up the buildings that open the Keep and then the Castle, as soon as the game's rules allow.
+- **Saved games** keep every AI's ships, ferries, colonies and the armies at sea, so a loaded game goes on with them.
 - **Island maps:** "3 Isles" and "Four Islands" still don't take AI Generals in the lobby, as in the original.
 
 ![The lobby's player list with three AI Generals of different tiers](shot:mech-ai-lobby)
