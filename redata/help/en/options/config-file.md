@@ -1,6 +1,6 @@
 ---
 title: Settings without a menu
-ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/cloudReflections#cloudreflections, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation, option/madeSwimAnimations#madeswimanimations, option/editorSaveFormat#editorsaveformat, option/forest#forest]
+ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation, option/madeSwimAnimations#madeswimanimations, option/editorSaveFormat#editorsaveformat, option/forest#forest]
 order: 90
 ---
 
@@ -57,10 +57,6 @@ How bright the explored land that none of your units sees right now is drawn und
 ## stainedGlass
 
 `true` (the default): the stained-glass window of the lower left panel is drawn as real glass that bends the light. `false`: as the original's flat picture.
-
-## cloudReflections
-
-`true` (the default): with [volumetric clouds](graphics/sky-weather.md#clouds) and [Water](graphics/water.md#water) at Low or above, lakes, the sea and the ice mirror the clouds' own shapes and storm cells. `false`: they mirror the sky's colours alone, greyed by the cloud cover. **Cost:** about 0.1 ms.
 
 ## skyLight
 
