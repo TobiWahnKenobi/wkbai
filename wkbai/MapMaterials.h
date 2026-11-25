@@ -66,6 +66,11 @@ namespace MapMaterials {
 	// of a gw x gh grid, 0-1; false when there is none (the scatter rules read them too)
 	bool ReadMaskLayer(const std::filesystem::path& file, int gw, int gh, std::vector<float>& out);
 
+	// the moisture per vertex (0-1, (width + 1) x (height + 1), row 0 the south edge as the terrain's
+	// vertices): what the ground rules read (distance to water and rivers, drainage, hollows, noise;
+	// or layers/moisture.png), for t with its water flooded; the forests by moisture (scatter) read it
+	std::vector<float> Moisture(const std::filesystem::path& folder, const json& mapJson, uint32_t seed, const Terrain& t);
+
 	// Paints the rules' tiles onto t: t's heights, lakes and texture database are set, the water
 	// flooded; hand[i] (per tile) marks the hand tiles, which stay as they are (the solver works
 	// around them). report: the materials report (shares, passability, unmatched edges with their

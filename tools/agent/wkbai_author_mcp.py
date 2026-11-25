@@ -71,7 +71,7 @@ TOOLS = [
      "mod: a mod's name (e.g. WKB_Plus) or none (the base game alone); default the mods as configured.",
      obj({"section": {"type": "string", "enum": SECTIONS}, "class": STR, "name": STR, "mod": STR, "edges": BOOL, "refresh": BOOL})),
     ("describe_map", "An existing map in numbers and a top-down picture: size, height range, histogram and slopes, the water (lakes, waterways, falls, tiles under water), "
-     "material shares (texture groups, terrains), object counts by class, blueprint and player. map: a map folder (name or path) or an original level "
+     "material shares (texture groups, terrains), object counts by class, blueprint and player, the placement checks (every building against the server's rules) and the bases' fairness. map: a map folder (name or path) or an original level "
      "(e.g. \"2 Player 4 Peaks.lvl\" or Save_Games\\\\<level>.lvl). picture: false for the numbers only.",
      obj({"map": STR, "picture": BOOL, "mod": STR}, ["map"])),
     ("new_map", "Make a new map folder: map.json and flat heights.png (no level: the compiler makes the players' bases from players). "
@@ -174,6 +174,39 @@ TOOLS = [
     ("material_report", "The last paint's materials report (as paint_materials returns it) and the material map, without compiling; "
      "moisture: true for the moisture picture too; presets: true for the material data instead (every material with its groups, the presets and their rules).",
      obj({"map": STR, "picture": BOOL, "moisture": BOOL, "presets": BOOL})),
+    # --- the objects (step 17.7): MapObjects.h, the scatter rules ---
+    ("set_bases", "Set or change the players' bases by intent (map.json players and \"bases\"), then compile and return the objects report (compile: false to only save). "
+     "Every building the compiler places goes through the server's own placement rules (the footprint free and on the map, its terrains, the slope limit, "
+     "the neighbour rule, the city rules): the civic centre goes on the nearest accepted site within searchM of its start, facing the map's middle; "
+     "the base's buildings on the nearest accepted sites at their distance from it, facing it (civic ones join its city as a peasant's stampdown would); "
+     "the peasants before its door. players: [{index, name, colour, start [x, z] (playable metres) or \"auto\" (chosen), base (default Manor), peasants, "
+     "buildings (this base's list, null: bases.buildings)}] changes those players (index: which; without index appends). "
+     "bases (a merge patch): {auto (every player without a start gets one), edgeM (80), waterM (40: from water), maxRiseM (6: within 25 m), room (0.6: the share of "
+     "buildable tiles within 30 m), minApartM (warned under), searchM (40), fairnessRadiusM (200), buildings: [{blueprint (a catalog building, e.g. City Houses, "
+     "Standard Farm, Barracks Stone), count, distance [min, max] m from the civic centre, toward centre|away|degrees}]}. "
+     "removePlayers: indices.",
+     obj({"map": MAP, "players": {"type": "array", "items": {"type": "object"}}, "removePlayers": {"type": "array", "items": INT},
+          "bases": {"type": "object"}, "compile": BOOL, "picture": BOOL}, ["map"])),
+    ("set_scatter", "Set or change the scatter rules (map.json \"scatter\": the Neutral Player's trees, deposits and props, made again at every compile), then compile "
+     "and return the objects report (compile: false to only save). A rule: {id, objects: [blueprint | [blueprint, [subtypes]]], and either "
+     "(by density) on: [materials or texture groups] (none: any ground), density (per hectare), spacing m, clump 0-1, max, maxSlopeDeg, awayFromBases m, "
+     "habitat {cover (0.2: the share of the land forested), soilScaleM (350: the size of the good-soil patches), moisture (0.2: how much wetter ground helps), aspect (0.12: north-facing slopes keep their water), "
+     "treelineRel (0.72: the high ground above it bare), waterGapM (12: no trees on waterlogged banks), clearings (0.15)} (THE forest rule: organic patches on good soil, a little likelier near water, "
+     "never a line along a river or a ring round a lake; shrunk to keep within maxPerKm2), maxPerKm2 (a tree budget; 700 by default with habitat, about the original 4 Peaks; trees cost frame time), "
+     "moisture [from, to] (density by moisture alone; draws contour lines round water, prefer habitat), densityMask (layers/<name>.png, 0-1), "
+     "objectsHigh with highFrom/highTo m and highMin/highMax (the share of the second list rising with height) or highMask (a layer); "
+     "or (in groups) near: bases with groups (per base), size (objects a group), spread m, distance [min, max] m, fair (default true: every base gets its groups "
+     "at the same distances with the same objects, each nearer its own base than any other), and count (groups over the map). "
+     "Objects never go on water, steep ground, a building or its neighbours, or a town (its city rectangles and two tiles round). "
+     "rules replaces the list; add appends; remove takes ids; patch: {id: merge patch}.",
+     obj({"map": MAP, "rules": {"type": "array", "items": {"type": "object"}}, "add": {"type": "array", "items": {"type": "object"}},
+          "remove": {"type": "array", "items": STR}, "patch": {"type": "object"}, "compile": BOOL, "picture": BOOL}, ["map"])),
+    ("objects_report", "The map's objects from its last compile (compile: true to compile first): the bases (each start, chosen or given, the civic centre's site, "
+     "how far it moved, the buildings asked and placed with their places, the peasants), the placement checks (every building against the server's rules as it "
+     "stands: passed, failed with status and place, by blueprint; characters blocked, containers on buildings), the fairness (per base within fairnessRadiusM: "
+     "wood, gold, stone, food the containers hold, deposits, farmable tiles, the nearest base; per resource the smallest over the largest), the scatter counts "
+     "(per rule, per base for the near-bases rules, a habitat forest's cover, patches, budget and its trees by the water against the land's, the moisture under a moisture forest), and the object warnings. picture: the top-down map.",
+     obj({"map": MAP, "compile": BOOL, "picture": BOOL}, ["map"])),
 ]
 
 
@@ -789,13 +822,122 @@ class Author:
         r["warnings"] = [w for w in report.get("warnings", []) if w.startswith("water") or w.startswith("lake ")]
         return r
 
+    # --- the objects ---
+    SCATTER_KEYS = {"id", "note", "role", "objects", "objectsHigh", "highFrom", "highTo", "highMin", "highMax", "highMask", "on", "density", "spacing",
+                    "clump", "max", "maxPerKm2", "maxSlopeDeg", "awayFromBases", "moisture", "habitat", "densityMask", "near", "groups", "size", "spread", "distance", "fair", "count"}
+    PLAYER_KEYS = {"name", "colour", "start", "base", "peasants", "buildings"}
+    BASES_KEYS = {"auto", "edgeM", "waterM", "maxRiseM", "room", "minApartM", "searchM", "fairnessRadiusM", "buildings"}
+
+    def _map_json(self, folder):
+        with open(os.path.join(folder, "map.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def _save_map_json(self, folder, mj):
+        with open(os.path.join(folder, "map.json"), "w", encoding="utf-8") as f:
+            json.dump(mj, f, indent=1)
+
+    def set_bases(self, a):
+        folder = self.need_folder(a["map"])
+        mj = self._map_json(folder)
+        players = list(mj.get("players") or [])
+        for p in a.get("players") or []:
+            if not isinstance(p, dict):
+                raise AuthorError({"error": "a player is an object: %r" % (p,)})
+            bad = [k for k in p if k not in self.PLAYER_KEYS and k != "index"]
+            if bad:
+                raise AuthorError({"error": "unknown player keys %s (known: index, %s)" % (bad, ", ".join(sorted(self.PLAYER_KEYS)))})
+            st = p.get("start")
+            if st is not None and st != "auto" and not (isinstance(st, list) and len(st) == 2):
+                raise AuthorError({"error": "start: [x, z] in playable metres or \"auto\", not %r" % (st,)})
+            body = {k: v for k, v in p.items() if k != "index"}
+            if "index" in p:
+                i = p["index"]
+                if not isinstance(i, int) or i < 0 or i >= len(players):
+                    raise AuthorError({"error": "no player %r (%d players)" % (i, len(players))})
+                players[i] = merge_patch(players[i], body)
+            else:
+                players.append(body)
+        rm = set(a.get("removePlayers") or [])
+        players = [p for i, p in enumerate(players) if i not in rm]
+        mj["players"] = players
+        if "bases" in a:
+            bad = [k for k in a["bases"] if k not in self.BASES_KEYS]
+            if bad:
+                raise AuthorError({"error": "unknown bases keys %s (known: %s)" % (bad, ", ".join(sorted(self.BASES_KEYS)))})
+            mj["bases"] = merge_patch(mj.get("bases") or {}, a["bases"])
+        for b in (mj.get("bases") or {}).get("buildings") or []:
+            if not (isinstance(b, str) or (isinstance(b, dict) and b.get("blueprint"))):
+                raise AuthorError({"error": "a base building is a blueprint name or {blueprint, count, distance, toward}: %r" % (b,)})
+        self._save_map_json(folder, mj)
+        if a.get("compile", True):
+            return self.objects_report({"map": folder, "compile": True, "picture": a.get("picture", False)})
+        return {"folder": folder, "players": players, "bases": mj.get("bases")}
+
+    def set_scatter(self, a):
+        folder = self.need_folder(a["map"])
+        mj = self._map_json(folder)
+        rules = list(mj.get("scatter") or [])
+        if "rules" in a:
+            rules = list(a["rules"])
+        if a.get("remove"):
+            rules = [r for r in rules if r.get("id") not in a["remove"]]
+        rules += list(a.get("add") or [])
+        for rid, patch in (a.get("patch") or {}).items():
+            hit = [i for i, r in enumerate(rules) if r.get("id") == rid]
+            if not hit:
+                raise AuthorError({"error": "patch: no scatter rule %r" % rid})
+            for i in hit:
+                rules[i] = merge_patch(rules[i], patch)
+        ids = set()
+        for r in rules:
+            if not isinstance(r, dict) or not r.get("objects"):
+                raise AuthorError({"error": "a scatter rule needs objects: %r" % (r,)})
+            bad = [k for k in r if k not in self.SCATTER_KEYS]
+            if bad:
+                raise AuthorError({"error": "rule %r: unknown keys %s (known: %s)" % (r.get("id"), bad, ", ".join(sorted(self.SCATTER_KEYS)))})
+            if "moisture" in r and not (isinstance(r["moisture"], list) and len(r["moisture"]) == 2):
+                raise AuthorError({"error": "rule %r: moisture is [from, to]" % r.get("id")})
+            if r.get("id") in ids:
+                raise AuthorError({"error": "two scatter rules with the id %r" % r.get("id")})
+            ids.add(r.get("id"))
+        mj["scatter"] = rules
+        self._save_map_json(folder, mj)
+        if a.get("compile", True):
+            return self.objects_report({"map": folder, "compile": True, "picture": a.get("picture", False)})
+        return {"folder": folder, "scatter": rules}
+
+    def objects_report(self, a):
+        folder = self.need_folder(a["map"])
+        r = {"folder": folder}
+        if a.get("compile"):
+            r["output"] = [l for l in self.run(folder).splitlines() if l.startswith("AUTHOR")]
+        rep = os.path.join(folder, "build", "report.json")
+        if not os.path.isfile(rep):
+            raise AuthorError({"error": "not compiled yet (compile: true)"})
+        with open(rep, encoding="utf-8") as f:
+            report = json.load(f)
+        for k in ("bases", "placement", "fairness", "scatter", "scatterNearBases", "scatterMoisture", "scatterHabitat", "objectsByRules"):
+            if k in report:
+                r[k] = report[k]
+        pre = ("base:", "bases:", "scatter", "placement:", "fairness:", "objects:")
+        r["warnings"] = [w for w in report.get("warnings", []) if w.startswith(pre)]
+        if a.get("picture"):
+            try:
+                pic = self.describe_map({"map": folder, "picture": True})
+                if isinstance(pic, dict) and "image" in pic:
+                    return {"description": r, "image": pic["image"], "path": pic["path"]}
+            except AuthorError as e:
+                r["picture"] = e.reply
+        return r
+
     def call(self, name, a):
         f = {"catalog": self.catalog, "describe_map": self.describe_map, "new_map": self.new_map, "import_map": self.import_map,
              "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile,
              "plan_terrain": self.plan_terrain, "generate_terrain": self.generate_terrain,
              "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation,
              "set_material_rules": self.set_material_rules, "paint_materials": self.paint_materials, "material_report": self.material_report,
-             "set_water": self.set_water, "water_report": self.water_report}.get(name)
+             "set_water": self.set_water, "water_report": self.water_report,
+             "set_bases": self.set_bases, "set_scatter": self.set_scatter, "objects_report": self.objects_report}.get(name)
         if not f:
             raise AuthorError({"error": "unknown tool " + str(name)})
         return f(a)

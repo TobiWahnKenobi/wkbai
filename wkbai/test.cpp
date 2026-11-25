@@ -15642,6 +15642,8 @@ void Test_TiltedWater();
 void Test_MapWaterObjects();
 // Water by intent (map authoring 17.6): MapWaterTest.cpp
 void Test_MapWater();
+
+void Test_MapObjects();
 void Test_GeneratedTransitions();
 
 // Artillery breaks the ice (ServerEnvironment::iceStruck, the game setting "breakingIce"): on
@@ -16160,6 +16162,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GeneratedTransitions, "Generated ground transitions: BC7 quality against bcdec, the generated groups with their corners (pairs and triples), BC7 files with mips and grey heights, the CPU decoding them, no second making from the same sources, made again on a stale stamp"},
 {Test_MapWater, "Water by intent: the water design's version 2 (speeds per point, far-land hints), a river with a gorge and a fall (its designed current in the renderer and the gameplay), a lake that holds, one that leaks, a puddle, rivers that rise and run dry, a sea on two winds, Extend map following its hints, compiled"},
 {Test_CartDriver, "Cart driver (Mechanics\\Cart Death.cpp): a cart beaten below a quarter of its hit points loses its rider, a riderless cart for the map's nameless player (1026) keeps its load, and another player's peasant takes it over (Take Cart): that player's cart at full hit points, the peasant its driver"},
+{Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by habitat (patches, a tree budget), the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
 };
 
 void LaunchTest()

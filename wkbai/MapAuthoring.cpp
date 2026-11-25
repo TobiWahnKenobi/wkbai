@@ -2,6 +2,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "MapAuthoring.h"
+#include "MapObjects.h"
 #include "MapFolder.h"
 #include "MapMaterials.h"
 #include "terrain.h"
@@ -732,6 +733,10 @@ bool Describe(const std::string& map, const std::string& png, json& out, std::st
 	// byClass also has the level's structure (cities, armies, towns, zones)
 	out["objects"] = { { "count", onMap }, { "byClass", byClass }, { "byBlueprint", byBlueprint } };
 	out["players"] = players;
+	// the placement checks (every building by the server's own rules, as it stands) and the
+	// bases' fairness (MapObjects.h), as the compiler's report has them
+	out["placement"] = MapObjects::CheckPlacement(&server, nullptr);
+	out["fairness"] = MapObjects::Fairness(&server, 200.0f, nullptr);
 
 	// the picture: relief (hypsometric tint, lit from the north-west) with the water, the
 	// waterways and falls, and the objects as symbols; north up
