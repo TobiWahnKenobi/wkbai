@@ -15886,6 +15886,156 @@ void Test_IceHoles()
 	printf("ICEHOLES %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+// The original's cart driver (game set Mechanics\Cart Death.cpp, the user's memory of 2026-11-25):
+// a cart hurt by swords or missiles to between 0 and a quarter of its hit points loses its rider,
+// not the cart. The rider dies ("Rider Dying"), and a "Cart sans Rider" stands there for player
+// 1026 (the map's nameless player) with the cart's food, wood and gold. Any player's peasant can
+// take it ("Take Cart"): the cart becomes that player's, at full hit points, and the peasant is its
+// new driver (removed). All game set; this checks that wkbai runs it as the original does.
+void Test_CartDriver()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("CARTDRIVER %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 31;
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* cartBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cart");
+	const GameObjBlueprint* riderlessBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cart sans Rider");
+	const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* peasantBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const int hp = gs.items.names.getIndex("Hit Points");
+	const int hpCap = gs.items.names.getIndex("Hit Point Capacity");
+	const int food = gs.items.names.getIndex("Food");
+	const int attackCmd = gs.commands.names.getIndex("Attack");
+	const int takeCmd = gs.commands.names.getIndex("Take Cart");
+	ServerGameObject* nameless = server.findObject(1026);
+	// the cart's owner and a player at war with it (neither the nameless one)
+	ServerGameObject* owner = nullptr;
+	ServerGameObject* foe = nullptr;
+	for (const auto& [type, players] : server.getLevel()->children)
+		for (CommonGameObject* p : players)
+			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && p != nameless) {
+				if (!owner)
+					owner = (ServerGameObject*)p;
+				else if (!foe && server.getDiplomaticStatus(owner, p) >= 2)
+					foe = (ServerGameObject*)p;
+			}
+	if (!cartBp || !riderlessBp || !spear || !peasantBp || hp < 0 || hpCap < 0 || food < 0 || attackCmd < 0 || takeCmd < 0 || !nameless || !owner || !foe) {
+		printf("CARTDRIVER not set up (cart %d, riderless %d, spearman %d, peasant %d, items %d %d %d, commands %d %d, player 1026 %d, owner %d, foe %d)\nCARTDRIVER FAILED (1)\n",
+			!!cartBp, !!riderlessBp, !!spear, !!peasantBp, hp, hpCap, food, attackCmd, takeCmd, !!nameless, !!owner, !!foe);
+		return;
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto step = [&]() {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+	};
+	// a land tile near the map's middle the cart can stand on
+	Terrain* t = server.terrain;
+	const auto [pw, ph] = t->getNumPlayableTiles();
+	Vector3 at(0, 0, 0);
+	for (int r = 0; r < std::max(pw, ph) / 2 && at.x == 0; r++)
+		for (int z = ph / 2 - r; z <= ph / 2 + r && at.x == 0; z++)
+			for (int x = pw / 2 - r; x <= pw / 2 + r && at.x == 0; x++) {
+				bool ok = x > 2 && z > 2 && x < pw - 3 && z < ph - 3;
+				for (int dz = -2; dz <= 2 && ok; dz++)
+					for (int dx = -2; dx <= 2 && ok; dx++) {
+						const TerrainTile* tile = t->getPlayableTile(x + dx, z + dz);
+						ok = tile && !tile->fullOfWater && !MovementController::isTerrainBlocked(cartBp, x + dx, z + dz) && !MovementController::isTileBlocked(cartBp, x + dx, z + dz);
+					}
+				if (ok) {
+					at = Vector3(x * 5.0f + 2.5f, 0, z * 5.0f + 2.5f);
+					at.y = t->getHeightEx(at.x, at.z, false);
+				}
+			}
+	if (at.x == 0) {
+		check(false, "a land tile for the cart");
+		printf("CARTDRIVER FAILED (%d)\n", failures);
+		return;
+	}
+	// the objects of a blueprint under a player, near the cart's spot
+	auto nearSpot = [&](ServerGameObject* player, const GameObjBlueprint* bp) -> ServerGameObject* {
+		auto it = player->children.find(GameObjBlueprintIndex(bp));
+		if (it == player->children.end())
+			return nullptr;
+		for (CommonGameObject* o : it->second)
+			if ((o->position - at).sqlen2xz() < 20.0f * 20.0f)
+				return (ServerGameObject*)o;
+		return nullptr;
+	};
+	// the cart, its load, and three spearmen of the foe attacking it
+	SrvGORef cart = server.spawnObject(cartBp, owner, at, Vector3(0, 0, 0));
+	if (ServerGameObject* c = cart.get())
+		c->setItem(food, 60.0f);
+	const float capacity = cart ? cart->getItem(hpCap) : 0.0f;
+	std::vector<SrvGORef> spearmen;
+	for (int i = 0; i < 3; i++)
+		spearmen.push_back(server.spawnObject(spear, foe, at + Vector3(3.0f + i, 0, 2.0f - i * 2.0f), Vector3(0, 0, 0)));
+	for (SrvGORef& s : spearmen)
+		if (s && cart)
+			server.issueCommand(attackCmd, s->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, cart->id, Vector3());
+	ServerGameObject* riderless = nullptr;
+	float lastHp = capacity;
+	int steps = 0;
+	for (; steps < 60 * 50 && !riderless; steps++) {
+		if (ServerGameObject* c = cart.get())
+			lastHp = c->getItem(hp);
+		step();
+		riderless = nearSpot(nameless, riderlessBp);
+	}
+	{
+		char what[260];
+		snprintf(what, sizeof(what), "the cart beaten (capacity %.0f, a quarter %.0f; its hit points last seen %.0f): after %.1f s a riderless cart for player 1026 %d, the cart with its rider gone %d",
+			capacity, capacity / 4, lastHp, steps / 50.0f, riderless != nullptr, cart.get() == nullptr || cart->blueprint != cartBp);
+		check(capacity > 0 && riderless != nullptr, what);
+	}
+	if (!riderless) {
+		printf("CARTDRIVER FAILED (%d)\n", failures);
+		return;
+	}
+	{
+		char what[160];
+		snprintf(what, sizeof(what), "the riderless cart keeps the cart's load: food %.0f (60), its own hit points %.0f", riderless->getItem(food), riderless->getItem(hp));
+		check(std::abs(riderless->getItem(food) - 60.0f) < 0.01f, what);
+	}
+	// the attackers gone (they might break the riderless cart), then a peasant of the foe takes it
+	for (SrvGORef& s : spearmen)
+		if (ServerGameObject* o = s.get())
+			server.deleteObject(o);
+	for (int i = 0; i < 25; i++)
+		step();
+	SrvGORef riderlessRef = riderless;
+	SrvGORef peasant = server.spawnObject(peasantBp, foe, at + Vector3(4.0f, 0, 0), Vector3(0, 0, 0));
+	if (peasant && riderlessRef)
+		server.issueCommand(takeCmd, peasant->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, riderlessRef->id, Vector3());
+	ServerGameObject* taken = nullptr;
+	for (steps = 0; steps < 30 * 50 && !taken; steps++) {
+		step();
+		if (ServerGameObject* r = riderlessRef.get(); r && r->parent == foe && r->blueprint == cartBp)
+			taken = r;
+		else if (!taken)
+			taken = nearSpot(foe, cartBp);
+	}
+	{
+		char what[260];
+		snprintf(what, sizeof(what), "a peasant of the foe takes it (Take Cart): after %.1f s the foe's cart %d, hit points %.0f of %.0f, food %.0f; the peasant gone %d, no riderless cart left %d",
+			steps / 50.0f, taken != nullptr, taken ? taken->getItem(hp) : 0.0f, taken ? taken->getItem(hpCap) : 0.0f, taken ? taken->getItem(food) : 0.0f,
+			peasant.get() == nullptr, nearSpot(nameless, riderlessBp) == nullptr);
+		check(taken && std::abs(taken->getItem(hp) - taken->getItem(hpCap)) < 0.01f && std::abs(taken->getItem(food) - 60.0f) < 0.01f && peasant.get() == nullptr
+			&& nearSpot(nameless, riderlessBp) == nullptr, what);
+	}
+	printf("CARTDRIVER %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -16009,6 +16159,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_IceHoles, "Ice holes: artillery breaks the ice, units on it fall in (one drowns, the shooter's kill; one swims out), the hole refreezes in the frost, stays in the warm, through a save, gone in a thaw"},
 {Test_GeneratedTransitions, "Generated ground transitions: BC7 quality against bcdec, the generated groups with their corners (pairs and triples), BC7 files with mips and grey heights, the CPU decoding them, no second making from the same sources, made again on a stale stamp"},
 {Test_MapWater, "Water by intent: the water design's version 2 (speeds per point, far-land hints), a river with a gorge and a fall (its designed current in the renderer and the gameplay), a lake that holds, one that leaks, a puddle, rivers that rise and run dry, a sea on two winds, Extend map following its hints, compiled"},
+{Test_CartDriver, "Cart driver (Mechanics\\Cart Death.cpp): a cart beaten below a quarter of its hit points loses its rider, a riderless cart for the map's nameless player (1026) keeps its load, and another player's peasant takes it over (Take Cart): that player's cart at full hit points, the peasant its driver"},
 };
 
 void LaunchTest()
