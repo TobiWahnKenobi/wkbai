@@ -1,6 +1,6 @@
 // wkbai - headless test of step 17.7 (MapObjects.h): a generated map with four bases (two starts
 // given, two chosen), their buildings laid out by intent, every building passing the server's
-// own placement rules, fair gold and stone near every base, forests by moisture, the checks in
+// own placement rules, fair gold and stone near every base, forests by habitat, the checks in
 // the compiler's report and in describe_map, a building placed by hand where the rules refuse it
 // reported with its place, the same objects from the same map twice, the city working in the
 // game (a house fits by the Manor) and the map played a minute.
@@ -103,9 +103,10 @@ void Test_MapObjects()
 	mj["ground"] = { { "preset", "temperate" } };
 	const oj oak = oj::array({ "Deciduous Tree", oj::array({ "Oak01", "Oak02", "Oak03" }) }), pine = oj::array({ "Coniferous Tree", oj::array({ "Pine01", "Pine02" }) });
 	mj["scatter"] = oj::array({
-		// forests by moisture: none on dry ground, full on the wettest
+		// forests by habitat: patches of good soil, a little likelier near water, none on the
+		// banks, few up the hills, within the budget (700 trees a km2)
 		{ { "id", "forest" }, { "objects", oj::array({ oak }) }, { "objectsHigh", oj::array({ pine }) }, { "highFrom", 40 }, { "highTo", 60 }, { "highMin", 0.1 },
-			{ "highMax", 0.9 }, { "moisture", { 0.55, 0.8 } }, { "density", 90 }, { "spacing", 6 }, { "clump", 0.4 }, { "max", 8000 }, { "awayFromBases", 70 } },
+			{ "highMax", 0.9 }, { "habitat", { { "cover", 0.2 } } }, { "density", 90 }, { "spacing", 6 }, { "clump", 0.3 }, { "awayFromBases", 70 } },
 		// a woodlot, gold and stone by every base, the same for each
 		{ { "id", "woodlot" }, { "near", "bases" }, { "objects", oj::array({ oak }) }, { "groups", 1 }, { "size", 20 }, { "spread", 16 }, { "distance", { 75, 110 } } },
 		{ { "id", "gold" }, { "near", "bases" }, { "objects", oj::array({ "Gold Deposit Medium" }) }, { "groups", 2 }, { "size", 3 }, { "distance", { 70, 150 } } },
@@ -164,9 +165,8 @@ void Test_MapObjects()
 	check("fair resources", even("gold", 6) && even("stone", 6) && even("woodlot", 20) && goldR > 0.99 && stoneR > 0.99,
 		"near the bases " + nb.dump() + "; within 200 m gold " + (ratios.contains("Gold") ? ratios["Gold"].dump() : "-") + ", stone "
 			+ (ratios.contains("Stone") ? ratios["Stone"].dump() : "-") + ", wood " + (ratios.contains("Wood") ? ratios["Wood"].dump() : "-"));
-	// 5. forests by moisture: the trees stand where the land is wetter, none on water, none in a
-	// town (a city rectangle and two tiles round it)
-	const oj sm = rep.value("scatterMoisture", oj::object()).value("forest", oj::object());
+	// 5. forests by habitat, none on water, none in a town (a city rectangle and two tiles round it)
+	const oj sm = rep.value("scatterHabitat", oj::object()).value("forest", oj::object());
 	const int forest = rep.value("scatter", oj::object()).value("forest", 0);
 	Terrain t;
 	t.readFromFile(MapFolder::TerrainFileOf(MapFolder::GamePathOf(folder)).c_str());
@@ -191,9 +191,16 @@ void Test_MapObjects()
 				if (tx >= rc.x0 - 2 && tx <= rc.x1 + 2 && tz >= rc.z0 - 2 && tz <= rc.z1 + 2) { inTown++; break; }
 		}
 	}
-	check("forests by moisture", forest > 300 && sm.value("underObjects", 0.0) > sm.value("land", 1.0) + 0.1 && onWater == 0 && inTown == 0 && !rects.empty(),
-		std::to_string(forest) + " forest trees (" + std::to_string(trees) + " trees in all), moisture under them " + F(sm.value("underObjects", 0.0)) + " against the land's "
-			+ F(sm.value("land", 0.0)) + "; " + std::to_string(onWater) + " objects on water, " + std::to_string(inTown) + " in a town (" + std::to_string(rects.size()) + " city rectangles)");
+	// the forest: within its budget, in several patches, not a line along the water (its share
+	// within 25 m of water at most twice the land's), and away from the water at least half as often as the land is
+	const double nearT = sm.value("treesWithin25mOfWater", 1.0), nearL = sm.value("landWithin25mOfWater", 0.0), far = sm.value("treesBeyond150mOfWater", 0.0), farL = sm.value("landBeyond150mOfWater", 1.0);
+	check("forests by habitat", forest > 300 && forest <= sm.value("budget", 0) && sm.value("patches", 0) >= 4 && nearT <= 2 * nearL + 0.02 && far >= 0.5 * farL
+			&& onWater == 0 && inTown == 0 && !rects.empty(),
+		std::to_string(forest) + " forest trees (budget " + std::to_string(sm.value("budget", 0)) + "; " + std::to_string(trees) + " trees in all), cover asked "
+			+ F(sm.value("coverAsked", 0.0)) + ", for the budget " + F(sm.value("coverForBudget", 0.0)) + ", made " + F(sm.value("coverMade", 0.0)) + ", "
+			+ std::to_string(sm.value("patches", 0)) + " patches (largest " + F(sm.value("largestPatchHa", 0.0)) + " ha); within 25 m of water " + F(nearT) + " of the trees against "
+			+ F(nearL) + " of the land, beyond 150 m " + F(far) + " against " + F(farL) + "; " + std::to_string(onWater) + " objects on water, " + std::to_string(inTown) + " in a town ("
+			+ std::to_string(rects.size()) + " city rectangles)");
 	// 6. describe_map: the same checks on the map as the server loads it
 	{
 		oj d;

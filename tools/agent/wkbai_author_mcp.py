@@ -190,7 +190,10 @@ TOOLS = [
     ("set_scatter", "Set or change the scatter rules (map.json \"scatter\": the Neutral Player's trees, deposits and props, made again at every compile), then compile "
      "and return the objects report (compile: false to only save). A rule: {id, objects: [blueprint | [blueprint, [subtypes]]], and either "
      "(by density) on: [materials or texture groups] (none: any ground), density (per hectare), spacing m, clump 0-1, max, maxSlopeDeg, awayFromBases m, "
-     "moisture [from, to] (a forest by moisture: none below from, full above to; the moisture the ground rules read), densityMask (layers/<name>.png, 0-1), "
+     "habitat {cover (0.2: the share of the land forested), soilScaleM (350: the size of the good-soil patches), moisture (0.2: how much wetter ground helps), aspect (0.12: north-facing slopes keep their water), "
+     "treelineRel (0.72: the high ground above it bare), waterGapM (12: no trees on waterlogged banks), clearings (0.15)} (THE forest rule: organic patches on good soil, a little likelier near water, "
+     "never a line along a river or a ring round a lake; shrunk to keep within maxPerKm2), maxPerKm2 (a tree budget; 700 by default with habitat, about the original 4 Peaks; trees cost frame time), "
+     "moisture [from, to] (density by moisture alone; draws contour lines round water, prefer habitat), densityMask (layers/<name>.png, 0-1), "
      "objectsHigh with highFrom/highTo m and highMin/highMax (the share of the second list rising with height) or highMask (a layer); "
      "or (in groups) near: bases with groups (per base), size (objects a group), spread m, distance [min, max] m, fair (default true: every base gets its groups "
      "at the same distances with the same objects, each nearer its own base than any other), and count (groups over the map). "
@@ -202,7 +205,7 @@ TOOLS = [
      "how far it moved, the buildings asked and placed with their places, the peasants), the placement checks (every building against the server's rules as it "
      "stands: passed, failed with status and place, by blueprint; characters blocked, containers on buildings), the fairness (per base within fairnessRadiusM: "
      "wood, gold, stone, food the containers hold, deposits, farmable tiles, the nearest base; per resource the smallest over the largest), the scatter counts "
-     "(per rule, per base for the near-bases rules, the moisture under a moisture forest against the land's), and the object warnings. picture: the top-down map.",
+     "(per rule, per base for the near-bases rules, a habitat forest's cover, patches, budget and its trees by the water against the land's, the moisture under a moisture forest), and the object warnings. picture: the top-down map.",
      obj({"map": MAP, "compile": BOOL, "picture": BOOL}, ["map"])),
 ]
 
@@ -821,7 +824,7 @@ class Author:
 
     # --- the objects ---
     SCATTER_KEYS = {"id", "note", "role", "objects", "objectsHigh", "highFrom", "highTo", "highMin", "highMax", "highMask", "on", "density", "spacing",
-                    "clump", "max", "maxSlopeDeg", "awayFromBases", "moisture", "densityMask", "near", "groups", "size", "spread", "distance", "fair", "count"}
+                    "clump", "max", "maxPerKm2", "maxSlopeDeg", "awayFromBases", "moisture", "habitat", "densityMask", "near", "groups", "size", "spread", "distance", "fair", "count"}
     PLAYER_KEYS = {"name", "colour", "start", "base", "peasants", "buildings"}
     BASES_KEYS = {"auto", "edgeM", "waterM", "maxRiseM", "room", "minApartM", "searchM", "fairnessRadiusM", "buildings"}
 
@@ -913,7 +916,7 @@ class Author:
             raise AuthorError({"error": "not compiled yet (compile: true)"})
         with open(rep, encoding="utf-8") as f:
             report = json.load(f)
-        for k in ("bases", "placement", "fairness", "scatter", "scatterNearBases", "scatterMoisture", "objectsByRules"):
+        for k in ("bases", "placement", "fairness", "scatter", "scatterNearBases", "scatterMoisture", "scatterHabitat", "objectsByRules"):
             if k in report:
                 r[k] = report[k]
         pre = ("base:", "bases:", "scatter", "placement:", "fairness:", "objects:")

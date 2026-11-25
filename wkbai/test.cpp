@@ -15948,7 +15948,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_IceHoles, "Ice holes: artillery breaks the ice, units on it fall in (one drowns, the shooter's kill; one swims out), the hole refreezes in the frost, stays in the warm, through a save, gone in a thaw"},
 {Test_GeneratedTransitions, "Generated ground transitions: BC7 quality against bcdec, the generated groups with their corners (pairs and triples), BC7 files with mips and grey heights, the CPU decoding them, no second making from the same sources, made again on a stale stamp"},
 {Test_MapWater, "Water by intent: the water design's version 2 (speeds per point, far-land hints), a river with a gorge and a fall (its designed current in the renderer and the gameplay), a lake that holds, one that leaks, a puddle, rivers that rise and run dry, a sea on two winds, Extend map following its hints, compiled"},
-{Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by moisture, the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
+{Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by habitat (patches, a tree budget), the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
 };
 
 void LaunchTest()

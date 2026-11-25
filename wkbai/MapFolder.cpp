@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <regex>
 #include <set>
@@ -1066,13 +1067,13 @@ namespace {
 		};
 		std::vector<std::string> block;
 		int made = 0;
-		json counts = json::object(), nearBases = json::object(), moistureRep = json::object();
+		json counts = json::object(), nearBases = json::object(), moistureRep = json::object(), habitatRep = json::object();
 		std::set<std::string> unknownBp;
 		// the bases' own groups first (gold, stone, woodlots by every base), then the rest in their
 		// order: a forest laid first had taken the ground a base's gold needed
 		std::vector<size_t> order;
 		auto byBases = [&](const json& r) {
-			return r.is_object() && r.value("near", "") == "bases" && !r.contains("on") && !r.contains("moisture") && !r.contains("densityMask");
+			return r.is_object() && r.value("near", "") == "bases" && !r.contains("on") && !r.contains("moisture") && !r.contains("habitat") && !r.contains("densityMask");
 		};
 		for (size_t ri = 0; ri < rules.size(); ri++) if (byBases(rules[ri])) order.push_back(ri);
 		for (size_t ri = 0; ri < rules.size(); ri++) if (!byBases(rules[ri])) order.push_back(ri);
@@ -1121,6 +1122,150 @@ namespace {
 			std::vector<uint32_t>& reuse = idsOf[rule];
 			const uint32_t rs = ScatterHash(m.seed, (uint32_t)ri, 0x5ca7, 1);
 			const float maxSlope = r.value("maxSlopeDeg", 32.0f), away = r.value("awayFromBases", 45.0f);
+			// "habitat": a forest where the land suits trees, in patches, not by one field's contour
+			// lines (the user's review of the first, moisture-only forests: a ring round the lake,
+			// bands along the river, far too many trees; "there can be a forest where no big river
+			// is just because the soil is good"; near rivers more likely but not guaranteed; the
+			// highlands mostly bare). Per vertex a suitability: deep soil (a warped noise at
+			// soilScaleM, thinner on steep and convex ground), a mild boost from the moisture, the
+			// aspect (north-facing slopes keep their water, south-facing ones dry out), nothing on
+			// waterlogged banks (waterGapM), a treeline on the high ground, clearings. The forest is
+			// the best `cover` share of the land, shrunk to keep the trees within maxPerKm2 (700: about
+			// 4 Peaks' own), so the woods stay dense rather than thinned
+			const bool byHabitat = r.contains("habitat") && r["habitat"].is_object();
+			std::vector<float> habitat, waterDistV;
+			json habRep;
+			int budget = std::numeric_limits<int>::max();
+			int nearWaterTrees = 0, farTrees = 0;
+			if (byHabitat) {
+				const json& hb = r["habitat"];
+				const float cover = hb.value("cover", 0.2f), soilScale = std::max(50.0f, hb.value("soilScaleM", 350.0f)), wMoist = hb.value("moisture", 0.2f),
+					wAspect = hb.value("aspect", 0.12f), treeline = hb.value("treelineRel", 0.72f), waterGap = hb.value("waterGapM", 12.0f),
+					clearings = hb.value("clearings", 0.15f), perKm2 = r.value("maxPerKm2", 700.0f), density = r.value("density", 20.0f);
+				const int gw = W + 1, gh = H + 1;
+				const size_t NV = (size_t)gw * gh;
+				std::vector<float> hv(NV);
+				std::vector<uint8_t> wet(NV, 0);
+				for (int z = 0; z < gh; z++)
+					for (int x = 0; x < gw; x++) hv[(size_t)z * gw + x] = terrain.getVertex(x, z);
+				for (int z = 0; z < H; z++)
+					for (int x = 0; x < W; x++)
+						if (terrain.tiles[(size_t)z * W + x].fullOfWater)
+							for (int k = 0; k < 4; k++) wet[(size_t)(z + (k >> 1)) * gw + x + (k & 1)] = 1;
+				// the distance to water in metres (a 3-4 chamfer, 5 m a step)
+				waterDistV.assign(NV, 1e9f);
+				for (size_t i = 0; i < NV; i++) if (wet[i]) waterDistV[i] = 0;
+				for (int pass = 0; pass < 2; pass++)
+					for (int k = 0; k < gh; k++) {
+						const int z = pass ? gh - 1 - k : k;
+						for (int j = 0; j < gw; j++) {
+							const int x = pass ? gw - 1 - j : j;
+							float& d = waterDistV[(size_t)z * gw + x];
+							const int s = pass ? 1 : -1;
+							const int nb[4][2] = { { s, 0 }, { 0, s }, { s, s }, { -s, s } };
+							for (const auto& o : nb) {
+								const int nx = x + o[0], nz = z + o[1];
+								if (nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
+								d = std::min(d, waterDistV[(size_t)nz * gw + nx] + ((o[0] && o[1]) ? 7.07f : 5.0f));
+							}
+						}
+					}
+				float lo = 1e30f, hi = -1e30f;
+				for (int z = E; z <= H - E; z++)
+					for (int x = E; x <= W - E; x++)
+						if (!wet[(size_t)z * gw + x]) lo = std::min(lo, hv[(size_t)z * gw + x]), hi = std::max(hi, hv[(size_t)z * gw + x]);
+				const float range = std::max(hi - lo, 1.0f);
+				auto Hv = [&](int x, int z) { return hv[(size_t)std::clamp(z, 0, gh - 1) * gw + std::clamp(x, 0, gw - 1)]; };
+				auto smooth = [](float a, float b, float v) { const float t = std::clamp((v - a) / (b - a), 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+				auto fbm = [&](float x, float z, uint32_t s) {
+					return 0.55f * ScatterNoise(x, z, s) + 0.3f * ScatterNoise(x * 2.03f, z * 2.03f, s ^ 0x9e37u) + 0.15f * ScatterNoise(x * 4.1f, z * 4.1f, s ^ 0x7f4au);
+				};
+				// the soil's patches: a warped noise, ranked over the land so it runs evenly from 0
+				// to 1 (a noise's own spread is narrow; ranked, the weights below mean what they say)
+				std::vector<float> soilN(NV, 0.0f), soilSorted;
+				for (int z = E; z <= H - E; z++)
+					for (int x = E; x <= W - E; x++) {
+						const size_t i = (size_t)z * gw + x;
+						if (wet[i]) continue;
+						const float px = (x - E) * 5.0f, pz = (z - E) * 5.0f;
+						const float wx = (ScatterNoise(px / soilScale * 0.7f, pz / soilScale * 0.7f, rs ^ 0x51a1u) - 0.5f) * 1.6f;
+						const float wz = (ScatterNoise(px / soilScale * 0.7f + 17.3f, pz / soilScale * 0.7f, rs ^ 0x51a2u) - 0.5f) * 1.6f;
+						soilN[i] = fbm(px / soilScale + wx, pz / soilScale + wz, rs ^ 0x5011u);
+						soilSorted.push_back(soilN[i]);
+					}
+				std::sort(soilSorted.begin(), soilSorted.end());
+				auto soilRank = [&](float v) {
+					return soilSorted.empty() ? 0.5f : (float)(std::lower_bound(soilSorted.begin(), soilSorted.end(), v) - soilSorted.begin()) / soilSorted.size();
+				};
+				std::vector<float> S(NV, -10.0f);
+				std::vector<float> landS;
+				for (int z = E; z <= H - E; z++)
+					for (int x = E; x <= W - E; x++) {
+						const size_t i = (size_t)z * gw + x;
+						if (wet[i]) continue;
+						const float px = (x - E) * 5.0f, pz = (z - E) * 5.0f;
+						const float gx = (Hv(x + 1, z) - Hv(x - 1, z)) / 10.0f, gz = (Hv(x, z + 1) - Hv(x, z - 1)) / 10.0f;
+						const float glen = std::sqrt(gx * gx + gz * gz), slope = std::atan(glen) * 57.2958f;
+						float mean = 0;
+						for (int oz = -2; oz <= 2; oz++) for (int ox = -2; ox <= 2; ox++) mean += Hv(x + ox, z + oz);
+						const float curv = hv[i] - mean / 25.0f;
+						// the soil: its patch (ranked), thinner on steep and convex ground
+						float soil = soilRank(soilN[i]);
+						soil *= 1.0f - smooth(12.0f, 35.0f, slope);
+						soil -= 0.1f * std::clamp(curv / 3.0f, -1.0f, 1.0f);
+						const float moist = moistureAt(px, pz);
+						float s = soil + wMoist * std::clamp((moist - 0.35f) / 0.35f, 0.0f, 1.0f);
+						// north (+z) facing: the land falls towards +z
+						if (glen > 1e-3f) s += wAspect * std::clamp(-gz / glen, -1.0f, 1.0f) * smooth(3.0f, 15.0f, slope);
+						s -= smooth(treeline, treeline + 0.15f, (hv[i] - lo) / range);
+						s -= clearings * smooth(0.62f, 0.75f, fbm(px / 150.0f, pz / 150.0f, rs ^ 0xc1eau));
+						if (waterDistV[i] < waterGap || moist > 0.95f) s = -10.0f; // waterlogged banks
+						S[i] = s;
+						landS.push_back(s);
+					}
+				const float landHa = landS.size() * 25.0f / 10000.0f;
+				const float km2 = pw * ph / 1e6f;
+				budget = (int)(perKm2 * km2);
+				// the cover the budget allows at the rule's density (85 % of the cells fill)
+				const float coverEff = std::min(cover, landHa > 0 ? budget / (density * 0.85f * landHa) : cover);
+				std::vector<float> sorted = landS;
+				std::sort(sorted.begin(), sorted.end());
+				const float thr = sorted.empty() ? 0.0f : sorted[std::clamp((size_t)((1.0f - coverEff) * sorted.size()), (size_t)0, sorted.size() - 1)];
+				habitat.assign(NV, 0.0f);
+				int forested = 0;
+				for (size_t i = 0; i < NV; i++) {
+					habitat[i] = smooth(thr - 0.03f, thr + 0.03f, S[i]); // a soft edge, centred on the threshold
+					forested += habitat[i] >= 0.5f;
+				}
+				// the patches (connected forest, 0.1 ha or more)
+				std::vector<uint8_t> seen(NV, 0);
+				int patches = 0, largest = 0;
+				std::vector<size_t> stack;
+				for (size_t i = 0; i < NV; i++) {
+					if (seen[i] || habitat[i] < 0.5f) continue;
+					int size = 0;
+					stack.assign(1, i);
+					seen[i] = 1;
+					while (!stack.empty()) {
+						const size_t c = stack.back();
+						stack.pop_back();
+						size++;
+						const int cx = (int)(c % gw), cz = (int)(c / gw);
+						const int n4[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+						for (const auto& o : n4) {
+							const int nx = cx + o[0], nz = cz + o[1];
+							if (nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
+							const size_t ni = (size_t)nz * gw + nx;
+							if (!seen[ni] && habitat[ni] >= 0.5f) { seen[ni] = 1; stack.push_back(ni); }
+						}
+					}
+					if (size >= 40) patches++;
+					largest = std::max(largest, size);
+				}
+				habRep = { { "coverAsked", cover }, { "coverForBudget", std::lround(coverEff * 1000) / 1000.0 },
+					{ "coverMade", landS.empty() ? 0.0 : std::lround(forested * 1000.0 / landS.size()) / 1000.0 }, { "budget", budget },
+					{ "patches", patches }, { "largestPatchHa", std::lround(largest * 25 / 1000.0) / 10.0 } };
+			}
 			int n = 0;
 			double moistSum = 0;
 			auto place = [&](float x, float z, uint32_t h) {
@@ -1164,6 +1309,11 @@ namespace {
 						warnings.push_back(rule + ": the game set has no container \"" + bp + "\" (written as asked)");
 				}
 				if (byMoisture) moistSum += moistureAt(x, z);
+				if (byHabitat) {
+					const float wd = waterDistV[(size_t)std::clamp((int)std::lround(z / 5) + E, 0, H) * (W + 1) + std::clamp((int)std::lround(x / 5) + E, 0, W)];
+					nearWaterTrees += wd <= 25.0f;
+					farTrees += wd > 150.0f;
+				}
 				take(x, z);
 				n++;
 			};
@@ -1171,7 +1321,7 @@ namespace {
 				for (auto& [bx, bz] : bases) if ((x - bx) * (x - bx) + (z - bz) * (z - bz) < away * away) return true;
 				return false;
 			};
-			if (r.contains("on") || byMoisture || !densityMask.empty()) {
+			if (r.contains("on") || byMoisture || byHabitat || !densityMask.empty()) {
 				// by ground: the groups of the materials (or the groups) named, a transition counting
 				// half; without "on" any ground. The density times the moisture's ramp and the mask
 				std::set<std::string> groups;
@@ -1188,7 +1338,7 @@ namespace {
 				}
 				const bool anyGround = !r.contains("on");
 				const float density = r.value("density", 20.0f), spacing = std::max(2.0f, r.value("spacing", 6.0f)), clump = r.value("clump", 0.5f);
-				const int limit = r.value("max", 30000);
+				const int limit = std::min(r.value("max", 30000), r.contains("maxPerKm2") || byHabitat ? (byHabitat ? budget : (int)(r["maxPerKm2"].get<float>() * pw * ph / 1e6f)) : 30000);
 				// a jittered grid of cells of `spacing`; a cell's chance is density x its area. First
 				// every place that would take one; over the limit, all of them thinned evenly (a cut in
 				// the order of the grid had left one side of the map bare)
@@ -1214,6 +1364,11 @@ namespace {
 							const float span = std::abs(mTo - mFrom) > 1e-4f ? mTo - mFrom : 1e-4f;
 							const float u = std::clamp((moistureAt(jx, jz) - mFrom) / span, 0.0f, 1.0f);
 							w *= u * u * (3 - 2 * u);
+							if (w <= 0) continue;
+						}
+						if (byHabitat) {
+							const int vx = std::clamp((int)std::lround(jx / 5) + E, 0, W), vz = std::clamp((int)std::lround(jz / 5) + E, 0, H);
+							w *= habitat[(size_t)vz * (W + 1) + vx];
 							if (w <= 0) continue;
 						}
 						if (!densityMask.empty()) {
@@ -1321,6 +1476,24 @@ namespace {
 					if (groupAt(cx, cz) > 0) gI++;
 				}
 			}
+			if (byHabitat) {
+				// the trees by the water against the land's share there (a forest isn't a riverside line)
+				int landNear = 0, landAll = 0, landFar = 0;
+				for (int z = E; z <= H - E; z++)
+					for (int x = E; x <= W - E; x++) {
+						const float wd = waterDistV[(size_t)z * (W + 1) + x];
+						if (wd <= 0) continue;
+						landAll++;
+						landNear += wd <= 25.0f;
+						landFar += wd > 150.0f;
+					}
+				habRep["trees"] = n;
+				habRep["treesWithin25mOfWater"] = n ? std::lround(nearWaterTrees * 1000.0 / n) / 1000.0 : 0.0;
+				habRep["landWithin25mOfWater"] = landAll ? std::lround(landNear * 1000.0 / landAll) / 1000.0 : 0.0;
+				habRep["treesBeyond150mOfWater"] = n ? std::lround(farTrees * 1000.0 / n) / 1000.0 : 0.0;
+				habRep["landBeyond150mOfWater"] = landAll ? std::lround(landFar * 1000.0 / landAll) / 1000.0 : 0.0;
+				habitatRep[id] = habRep;
+			}
 			counts[id] = n;
 			made += n;
 		}
@@ -1328,6 +1501,7 @@ namespace {
 		report["scatter"] = counts;
 		if (!nearBases.empty()) report["scatterNearBases"] = nearBases;
 		if (!moistureRep.empty()) report["scatterMoisture"] = moistureRep;
+		if (!habitatRep.empty()) report["scatterHabitat"] = habitatRep;
 		return made;
 	}
 
