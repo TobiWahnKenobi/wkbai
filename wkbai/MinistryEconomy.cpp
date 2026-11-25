@@ -324,7 +324,13 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	// so the food goes into the guard. (Belisar's ministry, Battleground seed 9: food at 0 from minute
 	// 2 to 25 with 40 peasants, 1,400 wood unspent, 1 fighter at home for 12 minutes. Fair maps, 120 games: the ministries won 66 with
 	// the hold, 54 without; slot 1 30 of 60 against 21.)
-	if (const int hold = (int)Tune("openingPeasants", 30.0f); hold > 0 && OpeningShort(g) > 0)
+	// Not with several rivals (WKB_MINTUNE ffaHold=1: the hold there too). Three neighbours' armies
+	// keep the guard short the whole opening, so the hold capped the economy at 30 peasants through
+	// minutes 4-20: four players (Fields Of Blood, 15 seeds) Belisar's ministry had 49 characters at 30
+	// minutes and 6 wipe-outs, against 81 and 3 without the hold (Elite: 75 and 0). A guard half the
+	// size changed nothing (its floor of 12 decides), the guard off entirely 82: the hold was the cost.
+	if (const int hold = (int)Tune("openingPeasants", 30.0f); hold > 0 && OpeningShort(g) > 0
+		&& (g.board.get("intel.rivals") <= 1.0 || Tune("ffaHold", 0.0f) != 0.0f))
 		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, std::max(hold, (int)peasants.size())); // (a hold, no peasant is lost: those over it stay, none comes)
 	// More farms with wood to spare (WKB_MINOFF 262144 off). The Kingmaker scripts want max(10,
 	// peasants / 2.5) farms ("How Many Farms I Want"), or "War Farms Needed" when that is set (their
@@ -509,6 +515,11 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 		for (ServerGameObject* p : peasants)
 			if (!ai.ministryHeld.count(p->id) && p->isInteractable() && !Lodged(p)) {
 				const std::string order = CurrentOrder(srv, p);
+				// (the Kingmaker's woodcutters run "AI Chop Tree", which this doesn't match: the miners come
+				// from the idle alone, minutes late. Left so on purpose: taking the "AI Chop Tree" woodcutters
+				// too, plus two of them under 500 wood and miners for a fighter building short of gold, gave
+				// 3-10 times the miners and lost: 37 of 72 games on the fair maps against 43, the army a
+				// fifth smaller; the gold rose by 10-30 only. Wood is what is short, not gold. 2026-11-24)
 				if (order.empty() || (order == "Chop Tree" && woodTaken < fromWood))
 					candidates.push_back(p);
 			}
