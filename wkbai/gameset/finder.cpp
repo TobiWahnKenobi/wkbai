@@ -1,4 +1,5 @@
 #include <SDL3/SDL_timer.h>
+#include "../util/ScriptProfile.h"
 #include <map>
 #include <algorithm>
 #include <cstdlib>
@@ -180,6 +181,7 @@ struct FinderResults : ObjectFinder {
 	int ofd;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ofd == -1) return {}; // TODO: Remove this after implementing exception handling
+		ScriptMark mark(ScriptMarks::FINDER, ctx->gameState->gameSet->objectFinderDefinitions[ofd]);
 		extern bool g_actionProfile;
 		if (g_actionProfile && ctx->isServer()) {
 			const uint64_t start = SDL_GetPerformanceCounter();
@@ -238,7 +240,7 @@ struct FinderPlayers : ObjectFinder {
 			if (it.first.bpClass() == Tags::GAMEOBJCLASS_PLAYER)
 				for (CommonGameObject *player : it.second)
 					if (auto _ = ctx->change(ctx->candidate, player->dyncast<CommonGameObject>()))
-						if (server->gameSet->equations[equation]->eval(ctx))
+						if (ScriptMark mark(ScriptMarks::VALUE, server->gameSet->equations[equation]); server->gameSet->equations[equation]->eval(ctx))
 							res.push_back(player->dyncast<CommonGameObject>());
 		}
 		return res;
@@ -650,6 +652,7 @@ struct FinderSubordinates : ObjectFinder {
 		if (!objbp || (objbp == obj->blueprint)) {
 			if ((bpclass == -1) || (bpclass == obj->blueprint->bpClass)) {
 				auto _ = ctx->change(ctx->candidate, obj);
+				ScriptMark mark(ScriptMarks::VALUE, equation == -1 ? nullptr : Server::instance->gameSet->equations[equation]);
 				if ((equation == -1) || (Server::instance->gameSet->equations[equation]->eval(ctx) > 0.0f))
 					return true;
 			}
@@ -775,6 +778,7 @@ struct FinderFilterFirst : ObjectFinder {
 		decltype(vec) res;
 		for (CommonGameObject *obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f) {
 				res.push_back(obj);
 				if (++num >= limit)
@@ -799,6 +803,7 @@ struct FinderFilter : ObjectFinder {
 		decltype(vec) res;
 		for (CommonGameObject *obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f) {
 				res.push_back(obj);
 			}
@@ -909,6 +914,7 @@ struct FinderGradeSelect : ObjectFinder {
 		auto vec = finder->eval(ctx);
 		g_scriptWork += vec.size();
 		ValueDeterminer *vd = Server::instance->gameSet->equations[equation];
+		ScriptMark mark(ScriptMarks::VALUE, vd);
 
 		std::vector<std::pair<float,CommonGameObject*>> values(vec.size());
 		bool nan = false;

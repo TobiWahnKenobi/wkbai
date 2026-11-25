@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "reaction.h"
+#include "../util/ScriptProfile.h"
 #include "../util/GSFileParser.h"
 #include "gameset.h"
 #include "actions.h"
@@ -75,7 +76,7 @@ bool PackageReceiptTrigger::canBeTriggeredBy(int evt, ServerGameObject *obj, Ser
 	SrvScriptContext ctx(Server::instance, obj);
 	auto senderChange = ctx.change(ctx.packageSender, sender);
 	for (int ass : assessments)
-		if (Server::instance->gameSet->equations[ass]->eval(&ctx) <= 0.0f)
+		if (ScriptMark mark(ScriptMarks::VALUE, Server::instance->gameSet->equations[ass]); Server::instance->gameSet->equations[ass]->eval(&ctx) <= 0.0f)
 			return false;
 	return true;
 }

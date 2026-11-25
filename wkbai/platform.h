@@ -32,5 +32,15 @@ unsigned long long ThreadCycles();
 // a sampling profiler of the calling thread (Windows; nothing elsewhere), for the tests: the top
 // functions by samples, inclusive and exclusive
 #include <string>
-void SamplerStart();
+#include <vector>
+// scripts: also the sim phase (g_simPhase) and the script marks (util/ScriptProfile.h) per sample
+void SamplerStart(bool scripts = false);
 std::string SamplerStop(int top);
+void SamplerHalt(); // stops the sampler; the samples stay until the next start
+struct SamplerSample {
+	std::vector<unsigned long long> frames; // return addresses, innermost first
+	const char* phase = nullptr;
+	struct Mark { const void* p; int kind; };
+	std::vector<Mark> marks; // outermost first
+};
+const std::vector<SamplerSample>& SamplerSamples();

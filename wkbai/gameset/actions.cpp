@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "actions.h"
+#include "../util/ScriptProfile.h"
 #include "../terrain.h"
 #include "finder.h"
 #include "../util/GSFileParser.h"
@@ -2642,6 +2643,7 @@ bool g_actionProfile = false;
 std::map<std::string, double> g_actionMs;
 
 void ActionSequence::run(SrvScriptContext* ctx) const {
+	ScriptMark mark(ScriptMarks::SEQUENCE, this);
 	const bool hasDebugInfo = debugInfo.get();
 	extern uint64_t g_scriptWork;
 	g_scriptWork += actionList.size();

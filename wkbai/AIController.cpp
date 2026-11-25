@@ -1,4 +1,5 @@
 #include "AIController.h"
+#include "util/ScriptProfile.h"
 #include "server.h"
 #include "gameset/ScriptContext.h"
 #include "gameset/Plan.h"
@@ -1228,7 +1229,7 @@ void AIController::update()
 						// type's cost (CANT_AFFORD, which reserves what is short), the wait conditions
 						SrvScriptContext cctx(Server::instance, building);
 						auto _s = cctx.selectedObject.change(building);
-						auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+						auto holds = [&](GSCondition* cond) { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&cctx); };
 						if (command && !std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
 							continue;
 						if (usesReserved(cost)) {
@@ -1462,7 +1463,7 @@ void AIController::update()
 						// The cost is what the research's start sequences take from the player.
 						SrvScriptContext uctx(Server::instance, building);
 						auto _s = uctx.selectedObject.change(building);
-						auto holds = [&](GSCondition* cond) { return cond->test->booleval(&uctx); };
+						auto holds = [&](GSCondition* cond) { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&uctx); };
 						if (command && !std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
 							continue;
 						float cost[3] = { 0.0f, 0.0f, 0.0f };

@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "util/ScriptProfile.h"
 #include <typeinfo>
 #include "help/Help.h"
 #include "wkbre2.h"
@@ -4158,7 +4159,39 @@ void Test_AIvsAI()
 		saveAt = startTime + cfg["saveAt"][0].get<float>();
 		saveName = cfg["saveAt"][1].get<std::string>();
 	}
+	// "scriptSample": [from, to] (game seconds after the start): the script share of the steps
+	// between, sampled (util/ScriptProfile.h): "SCRIPTS aitest ..." lines and scriptsample.json
+	float scriptFrom = -1.0f, scriptTo = -1.0f;
+	double scriptMs = 0.0;
+	uint64_t scriptSteps = 0;
+	bool scriptSampling = false;
+	if (cfg.contains("scriptSample") && cfg["scriptSample"].is_array() && cfg["scriptSample"].size() == 2) {
+		scriptFrom = startTime + cfg["scriptSample"][0].get<float>();
+		scriptTo = startTime + cfg["scriptSample"][1].get<float>();
+	}
 	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
+		if (scriptFrom >= 0.0f && !scriptSampling && server.timeManager.currentTime >= scriptFrom) {
+			scriptSampling = true;
+			scriptFrom = -1.0f;
+			SamplerStart(true);
+		}
+		if (scriptSampling && server.timeManager.currentTime >= scriptTo) {
+			scriptSampling = false;
+			SamplerHalt();
+			std::string text;
+			const std::string json = ScriptSampleReport(server.gameSet.get(), scriptMs / std::max<uint64_t>(1, scriptSteps), cfg.value("scriptTop", 15), &text);
+			size_t at = 0;
+			while (at < text.size()) {
+				const size_t nl = text.find('\n', at);
+				printf("SCRIPTS aitest t=%.0f %s\n", server.timeManager.currentTime, text.substr(at, nl - at).c_str());
+				at = nl == std::string::npos ? text.size() : nl + 1;
+			}
+			if (FILE* f = fopen(cfg.value("scriptReport", std::string("scriptsample.json")).c_str(), "w")) {
+				fputs(nlohmann::json::parse(json).dump(2).c_str(), f);
+				fclose(f);
+			}
+			fflush(stdout);
+		}
 		const double stepStart = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency());
 		if (saveAt >= 0.0f && server.timeManager.currentTime >= saveAt) {
 			saveAt = -1.0f;
@@ -4195,6 +4228,7 @@ void Test_AIvsAI()
 		}
 		const double stepMs = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency()) - stepStart;
 		minuteSimMs += stepMs;
+		if (scriptSampling) { scriptMs += stepMs; scriptSteps++; }
 		// in a game the server catches up at most 10 steps (200 ms): a longer step loses time
 		minuteMaxStepMs = std::max(minuteMaxStepMs, stepMs);
 		if (server.timeManager.currentTime >= nextCensus) {
@@ -15562,8 +15596,10 @@ void Test_SimProfile()
 			const unsigned long long cyclesStart = ThreadCycles();
 			// "sample": a phase's name: where its steps' time goes, by function (Windows)
 			const bool sampled = cfg.value("sample", std::string()) == phaseNames[phase];
-			if (sampled)
-				SamplerStart();
+			// "scripts": true: every phase sampled for its scripts' share (util/ScriptProfile.h)
+			const bool scripts = cfg.value("scripts", false);
+			if (sampled || scripts)
+				SamplerStart(scripts);
 			for (int i = 0; i < steps; i++) {
 				const Snap s0 = snap();
 				const double t0 = now();
@@ -15578,6 +15614,7 @@ void Test_SimProfile()
 			}
 			const double wall = now() - phaseStart;
 			const unsigned long long cyclesEnd = ThreadCycles();
+			SamplerHalt();
 			if (sampled)
 				printf("SAMPLES %s %s\n", phaseNames[phase], SamplerStop(cfg.value("sampleTop", 60)).c_str());
 			const Snap phaseAfter = snap();
@@ -15618,6 +15655,18 @@ void Test_SimProfile()
 				{ "objectsPerStep", (double)(after.objects - before.objects) / n }, { "ordersGiven", ordered }, { "ordersGivenMs", ordersMs },
 				{ "aliveOwn", aliveOwn }, { "aliveEnemy", aliveEnemy }, { "spikes", spikes } };
 			if (detail) p["pathThreadMs"] = astarMs;
+			if (scripts) {
+				std::string text;
+				const std::string json = ScriptSampleReport(server.gameSet.get(), avg, cfg.value("scriptTop", 15), &text);
+				size_t at = 0;
+				while (at < text.size()) {
+					const size_t nl = text.find('\n', at);
+					printf("SCRIPTS %5d units %-6s %s\n", perSide * 2, phaseNames[phase], text.substr(at, nl - at).c_str());
+					at = nl == std::string::npos ? text.size() : nl + 1;
+				}
+				p["scripts"] = nlohmann::json::parse(json);
+				fflush(stdout);
+			}
 		}
 		report["runs"].push_back(run);
 	}

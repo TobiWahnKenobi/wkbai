@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "../Model.h"
+#include "../util/ScriptProfile.h"
 #include "GameObjBlueprint.h"
 #include "values.h"
 #include "gameset.h"
@@ -140,6 +141,7 @@ struct ValueEquationResult : ValueDeterminer {
 			return 0.0f;
 		}
 		auto _ = ctx->changeSelf(obj);
+		ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 		const float v = ctx->gameState->gameSet->equations[equation]->eval(ctx);
 		// (never quite 0: "Food, Less Penalty" divides the consumption by it, and a harsh winter's
 		// 0 gave Food 0 x infinity = NaN; this small a support takes all the food delivered)
@@ -170,6 +172,7 @@ struct ValueEquationResultOver : ValueDeterminer {
 		bool first = true;
 		for (CommonGameObject* obj : finder->eval(ctx)) {
 			auto _ = ctx->changeSelf(obj);
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 			const float v = ctx->gameState->gameSet->equations[equation]->eval(ctx);
 			if (kind == TOTAL) result += v;
 			else if (first || (kind == MIN ? v < result : v > result)) result = v;
@@ -335,6 +338,7 @@ struct ValueValueTagInterpretation : ValueDeterminer {
 		else
 			vd = ctx->gameState->gameSet->valueTags[valueTag].get();
 		if (!vd) return 0.0f;
+		ScriptMark mark(ScriptMarks::VALUE, vd);
 		auto _ = ctx->changeSelf(obj);
 		return vd->eval(ctx);
 	}
@@ -476,6 +480,7 @@ struct ValueFinderResultsCount : ValueDeterminer {
 		CommonGameObject* obj = finder->getFirst(ctx);
 		if (!obj) return 0.0f;
 		auto _ = ctx->changeSelf(obj);
+		ScriptMark mark(ScriptMarks::FINDER, Server::instance->gameSet->objectFinderDefinitions[ofd]);
 		return (float)Server::instance->gameSet->objectFinderDefinitions[ofd]->eval(ctx).size();
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
@@ -1017,6 +1022,7 @@ struct ValueAverageEquationResult : ValueDeterminer {
 		float sum = 0.0f;
 		for (auto* obj : vec) {
 			auto _ = ctx->changeSelf(obj);
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 			sum += ctx->gameState->gameSet->equations[equation]->eval(ctx);
 		}
 		return sum / (float)vec.size();
@@ -1109,7 +1115,7 @@ bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildin
 		SrvScriptContext ctx(Server::instance, building);
 		auto _ = ctx.selectedObject.change(building);
 		if (std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(),
-			[&](GSCondition* cond) { return cond->test->booleval(&ctx); }))
+			[&](GSCondition* cond) { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&ctx); }))
 			return true;
 	}
 	return false;

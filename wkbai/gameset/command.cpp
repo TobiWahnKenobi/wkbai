@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include <SDL3/SDL_timer.h>
+#include "../util/ScriptProfile.h"
 #include "command.h"
 #include "gameset.h"
 #include "../util/util.h"
@@ -85,8 +86,12 @@ bool Command::canBeExecuted(ServerGameObject* self, ServerGameObject* target) co
 	SrvScriptContext ctx(Server::instance, self);
 	auto _1 = ctx.target.change(target);
 	auto _2 = ctx.selectedObject.change(self);
-	auto testCondition = [&ctx](GSCondition* cond) -> bool {return cond->test->booleval(&ctx); };
-	auto testEquation = [&ctx](int equ) -> bool { return equ != -1 ? Server::instance->gameSet->equations[equ]->booleval(&ctx) : true; };
+	auto testCondition = [&ctx](GSCondition* cond) -> bool { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&ctx); };
+	auto testEquation = [&ctx](int equ) -> bool {
+		if (equ == -1) return true;
+		ScriptMark mark(ScriptMarks::VALUE, Server::instance->gameSet->equations[equ]);
+		return Server::instance->gameSet->equations[equ]->booleval(&ctx);
+	};
 
 	return std::all_of(this->conditionsImpossible.begin(), this->conditionsImpossible.end(), testCondition)
 		&& std::all_of(this->conditionsWait.begin(), this->conditionsWait.end(), testCondition)
