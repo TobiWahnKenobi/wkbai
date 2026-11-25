@@ -9,6 +9,7 @@
 #include "file.h"
 #include "SaveFile.h"
 #include "WaterDesign.h"
+#include "MapWater.h"
 #include "Environment.h"
 #include "TrnTextureDb.h"
 #include "settings.h"
@@ -1436,6 +1437,8 @@ namespace {
 			else if (!seed->fullOfWater)
 				warnings.push_back("lake " + std::to_string(i) + " at (" + std::to_string(sx) + ", " + std::to_string(sz) + ") floods nothing: the ground there is above its level");
 		}
+		// the water by intent (MapWater.h): leaks, puddles, rising and dry rivers, the falls drawn
+		report["water"] = MapWater::Check(t, MapWater::SeaLevelOf(m.raw), warnings);
 		// the ground by rule (MapMaterials.h): materials per vertex, then the edge-rule solver; the
 		// hand tiles stay
 		if (byMaterials) {

@@ -2395,7 +2395,11 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		for (size_t i = 0; i < w.c.size(); i++)
 			if (i % 2 == 0 || i + 1 == w.c.size() || std::abs(w.level[i] - (w.level[i - 1] + w.level[i + 1]) * 0.5f) > 0.03f)
 				pts.push_back({ std::round(w.c[i].x * 10) / 10, std::round(w.c[i].z * 10) / 10, std::round((w.level[i] + raisedBy) * 1000) / 1000 });
-		riverWays.push_back({ { "points", pts }, { "width", w.width }, { "by", "terrain:" + w.f->j.value("id", std::to_string(w.f->index)) } });
+		json way = { { "points", pts }, { "width", w.width }, { "by", "terrain:" + w.f->j.value("id", std::to_string(w.f->index)) } };
+		// (the plan's current for it: the renderer's and the gameplay's, WaterDesign speed)
+		if (w.f->j.contains("speed") && w.f->j["speed"].is_number() && w.f->j["speed"].get<float>() > 0)
+			way["speed"] = w.f->j["speed"].get<float>();
+		riverWays.push_back(way);
 	}
 	json terrainOut = raw.value("terrain", json::object());
 	if (!terrainOut.is_object()) terrainOut = json::object();

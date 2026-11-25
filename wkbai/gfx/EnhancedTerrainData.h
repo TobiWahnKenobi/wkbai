@@ -100,6 +100,11 @@ struct TerrainGrassBuilder {
 // wide water that reaches the map's edge; wide water enclosed by land is a lake, also when a
 // river joins it to the sea (the wide water is grouped apart from the rivers).
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea = nullptr);
+// The water design's current per tile (WaterDesign::designedSpeed, its waterways' speed and
+// speeds): one byte a tile, m/s x 20 (0.05 steps to 12.75), 0 where none is set; spread one tile
+// onto the land beside it, so the river's edge doesn't fall back to the width's current. The river
+// shader's current takes it (the rapids map's g) instead of the one by the river's width.
+std::vector<uint8_t> BuildDesignedCurrent(const Terrain* terrain);
 
 // How much each of the water design's sea regions (WaterDesign::seas, at most 8) drives the waves
 // at each tile: 8 bytes per tile (z * width + x), the regions' shares in 255ths, summing to 255

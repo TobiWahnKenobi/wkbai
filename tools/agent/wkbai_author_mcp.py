@@ -98,7 +98,7 @@ TOOLS = [
      "plateau {at (point + radius, or a polygon [[x,z],...]), height, cliffs 0-1, ramps (count), rampsAt [[x,z]], rampDeg, rampWidth}; "
      "valley {line, width, depth (below base) or floorHeight [from, to], fall, floor (flat share 0-0.9)}; basin {at, radius, depth, water (a lake level)}; "
      "coast {side north|south|east|west (or line + seaSide [x,z]), sea (m of sea from the side), seaDepth, shelf, beach, cliffs 0-1}; "
-     "island {at, radius or polygon, height, seaDepth, shelf}; river {line or from/to, width, depth, meander 0-1, fords (count), valleyWidth, valleyDepth, bank, bankDeg}; "
+     "island {at, radius or polygon, height, seaDepth, shelf}; river {line or from/to, width, depth, meander 0-1, fords (count), valleyWidth, valleyDepth, bank, bankDeg, water (true: water in it, a sloped waterway down its course from source to mouth, never rising, its falls where the bed drops; false or left out: a dry channel painted as river bed), speed (m/s: its current, for the renderer and the gameplay; left out: found from the land)}; "
      "pass {at, height (saddle), width, direction (deg, the way across), maxSlopeDeg}; terraces {at? (none: everywhere), step m, strength 0-1}; flat {at, radius, height? (default the mean)}. "
      "features replaces the list; add appends; remove takes ids or indices; patch is a merge patch on terrain. Returns the stats as generate_terrain.",
      obj({"map": MAP, "terrain": {"type": "object"}, "patch": {"type": "object"}, "features": {"type": "array", "items": {"type": "object"}},
@@ -148,6 +148,29 @@ TOOLS = [
      "as they are; the solver works around them. Returns the materials report: each material's share, tiles and passability (blocked and slow tiles), "
      "every unmatched tile with its place and why, the solver's numbers and time; picture (default true): the top-down material map (unmatched tiles red).",
      obj({"map": MAP, "picture": BOOL}, ["map"])),
+    # --- the water (step 17.6): WaterDesign.h, MapWater.h ---
+    ("set_water", "Set or change the map's water by intent (water.json), then compile and return the water report (compile: false to only save). "
+     "Positions in playable metres [x, z] (x east, z north), levels in metres. "
+     "lakes: [[x, z, level], ...] replaces the lake points (each floods its basin to its level; the sea is a lake point at the sea level), addLakes appends, removeLakes (indices); "
+     "waterways: [{points [[x, z] or [x, z, level]], width m, speed m/s, speeds [m/s per point], by}] replaces the rivers' courses (from source to mouth; a level on every point: "
+     "a sloped river whose surface runs down the course, falls where it drops), addWaterways appends, removeWaterways (indices or by-names); "
+     "speed: [{waterway (index or by), speed, speeds}] sets the current of existing ones (the generator's \"terrain:<id>\" ones too; a lazy river in the plain, fast in a gorge: speeds per point); "
+     "seas: [{name, wind (deg from +x towards +z, the way the waves run), waves (height, 1 default)}] (at most 8, painted A-H); "
+     "paint: [{surface: \".\" auto | r river | l lake | A-H sea region, rect [x0, z0, x1, z1] or circle {at, radius} (m), or all: true}] in order; "
+     "waterfalls: [{from [x, z], to [x, z]}] placed lips (replaces), autoWaterfalls (the finder's falls too, default true); "
+     "farland: [{kind sea|land|mountains|lowland|river, toward (a compass name, north the top of the map, or deg from +x towards +z), spread deg (90), "
+     "from (tiles beyond the edge where it is full), weight 0-1, at [x, z] (a river: its exit on the map's edge), level (a sea's, where the map has none)}] "
+     "what Extend map's far land does beyond the map (replaces; addFarland appends). Old files read as before.",
+     obj({"map": MAP, "lakes": {"type": "array"}, "addLakes": {"type": "array"}, "removeLakes": {"type": "array", "items": INT},
+          "waterways": {"type": "array", "items": {"type": "object"}}, "addWaterways": {"type": "array", "items": {"type": "object"}}, "removeWaterways": {"type": "array"},
+          "speed": {"type": "array", "items": {"type": "object"}}, "seas": {"type": "array", "items": {"type": "object"}},
+          "paint": {"type": "array", "items": {"type": "object"}}, "waterfalls": {"type": "array", "items": {"type": "object"}}, "autoWaterfalls": BOOL,
+          "farland": {"type": "array", "items": {"type": "object"}}, "addFarland": {"type": "array", "items": {"type": "object"}}, "compile": BOOL}, ["map"])),
+    ("water_report", "The map's water by intent from its last compile (compile: true to compile first): each lake point's flood (tiles, depth, the sea or a lake, leaks: "
+     "off the map's edge, past the painted lake, over half the map, a lower lake drowned; a puddle on flat ground), each waterway (wet share, dry stretches, where it rises, "
+     "its speed), painted river tiles left dry, the waterfalls the renderer will draw (place, the way it falls, width, drop), a sloped river's steep stretches drawn as rapids (white water, place, drop) and placed falls that draw nothing, the rivers "
+     "leaving the map (Extend map carries them on) and the far-land hints (a river hint with no river leaving there); warnings: every water fault with its place.",
+     obj({"map": MAP, "compile": BOOL}, ["map"])),
     ("material_report", "The last paint's materials report (as paint_materials returns it) and the material map, without compiling; "
      "moisture: true for the moisture picture too; presets: true for the material data instead (every material with its groups, the presets and their rules).",
      obj({"map": STR, "picture": BOOL, "moisture": BOOL, "presets": BOOL})),
@@ -636,12 +659,143 @@ class Author:
             raise AuthorError({"error": "map (or presets: true)"})
         return self._material_result(self.need_folder(a["map"]), a.get("picture", True), a.get("moisture", False))
 
+    # --- the water ---
+    def _water_file(self, folder):
+        with open(os.path.join(folder, "map.json"), encoding="utf-8") as f:
+            mj = json.load(f)
+        W, H = mj["size"]["tiles"]
+        E = mj["size"].get("edge", 30)
+        path = os.path.join(folder, "water.json")
+        wj = {}
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                wj = json.load(f)
+        wj.setdefault("format", "wkbai water")
+        wj.setdefault("version", 1)
+        wj["tiles"] = [W, H]
+        return path, wj, W, H, E
+
+    def set_water(self, a):
+        folder = self.need_folder(a["map"])
+        path, wj, W, H, E = self._water_file(folder)
+
+        def lake(l):
+            if not isinstance(l, (list, tuple)) or len(l) < 3:
+                raise AuthorError({"error": "a lake is [x, z, level] (playable metres): %r" % (l,)})
+            return [l[0] + E * 5.0, l[2], l[1] + E * 5.0, 0]
+        lakes = list(wj.get("lakes") or [])
+        if "lakes" in a:
+            lakes = [lake(l) for l in a["lakes"]]
+        if a.get("removeLakes"):
+            lakes = [l for i, l in enumerate(lakes) if i not in a["removeLakes"]]
+        lakes += [lake(l) for l in a.get("addLakes") or []]
+        wj["lakes"] = lakes
+
+        def way(w):
+            if not isinstance(w, dict) or not isinstance(w.get("points"), list) or len(w["points"]) < 2:
+                raise AuthorError({"error": "a waterway needs points: [[x, z] or [x, z, level], ...] (at least 2)"})
+            if "speeds" in w and len(w["speeds"]) != len(w["points"]):
+                raise AuthorError({"error": "a waterway's speeds: one per point (%d points, %d speeds)" % (len(w["points"]), len(w["speeds"]))})
+            return {k: v for k, v in w.items() if k in ("points", "width", "speed", "speeds", "by")}
+        ways = list(wj.get("waterways") or [])
+        if "waterways" in a:
+            ways = [way(w) for w in a["waterways"]]
+        if a.get("removeWaterways"):
+            rm = a["removeWaterways"]
+            ways = [w for i, w in enumerate(ways) if i not in rm and w.get("by") not in rm]
+        ways += [way(w) for w in a.get("addWaterways") or []]
+        for sp in a.get("speed") or []:
+            key = sp.get("waterway")
+            hit = [w for i, w in enumerate(ways) if i == key or (isinstance(key, str) and w.get("by") == key)]
+            if not hit:
+                raise AuthorError({"error": "speed: no waterway %r (an index or a by-name such as terrain:<id>)" % (key,)})
+            for w in hit:
+                if "speed" in sp:
+                    if sp["speed"]:
+                        w["speed"] = sp["speed"]
+                    else:
+                        w.pop("speed", None)
+                if "speeds" in sp:
+                    if sp["speeds"] and len(sp["speeds"]) != len(w["points"]):
+                        raise AuthorError({"error": "speeds: one per point (%d points)" % len(w["points"])})
+                    if sp["speeds"]:
+                        w["speeds"] = sp["speeds"]
+                    else:
+                        w.pop("speeds", None)
+        wj["waterways"] = ways
+        if "seas" in a:
+            if len(a["seas"]) > 8:
+                raise AuthorError({"error": "at most 8 sea regions (A-H)"})
+            wj["seas"] = a["seas"]
+        if a.get("paint"):
+            rows = [list((r + "." * W)[:W]) for r in (wj.get("surface") or [])][:H]
+            rows += [["."] * W for _ in range(H - len(rows))]
+            for p in a["paint"]:
+                c = p.get("surface", ".")
+                if c not in (".", "r", "l") and not ("A" <= c <= "H"):
+                    raise AuthorError({"error": "paint surface: . r l or A-H, not %r" % c})
+                for z in range(H):
+                    for x in range(W):
+                        cx, cz = (x - E + 0.5) * 5.0, (z - E + 0.5) * 5.0
+                        if p.get("all"):
+                            hit = True
+                        elif "rect" in p:
+                            x0, z0, x1, z1 = p["rect"]
+                            hit = min(x0, x1) <= cx <= max(x0, x1) and min(z0, z1) <= cz <= max(z0, z1)
+                        elif "circle" in p:
+                            q = p["circle"]
+                            hit = (cx - q["at"][0]) ** 2 + (cz - q["at"][1]) ** 2 <= q["radius"] ** 2
+                        else:
+                            raise AuthorError({"error": "paint: rect, circle or all"})
+                        if hit:
+                            rows[z][x] = c
+            wj["surface"] = ["".join(r) for r in rows]
+        if "waterfalls" in a:
+            wj["waterfalls"] = a["waterfalls"]
+        if "autoWaterfalls" in a:
+            wj["autoWaterfalls"] = bool(a["autoWaterfalls"])
+        kinds = ("sea", "land", "mountains", "lowland", "river")
+        hints = list(wj.get("farland") or [])
+        if "farland" in a:
+            hints = list(a["farland"])
+        hints += list(a.get("addFarland") or [])
+        for h in hints:
+            if not isinstance(h, dict) or h.get("kind") not in kinds or "toward" not in h:
+                raise AuthorError({"error": "a far-land hint needs kind (%s) and toward: %r" % ("|".join(kinds), h)})
+        if hints:
+            wj["farland"] = hints
+        else:
+            wj.pop("farland", None)
+        wj["version"] = 2 if hints or any("speeds" in w for w in ways) else 1
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(wj, f, indent=1)
+        if a.get("compile", True):
+            return self.water_report({"map": folder, "compile": True})
+        return {"folder": folder, "water": wj}
+
+    def water_report(self, a):
+        folder = self.need_folder(a["map"])
+        r = {"folder": folder}
+        if a.get("compile"):
+            r["output"] = [l for l in self.run(folder).splitlines() if l.startswith("AUTHOR")]
+        rep = os.path.join(folder, "build", "report.json")
+        if not os.path.isfile(rep):
+            raise AuthorError({"error": "not compiled yet (compile: true)"})
+        with open(rep, encoding="utf-8") as f:
+            report = json.load(f)
+        r["water"] = report.get("water")
+        r["lakes"] = report.get("lakes")
+        r["tilesUnderWater"] = report.get("tilesUnderWater")
+        r["warnings"] = [w for w in report.get("warnings", []) if w.startswith("water") or w.startswith("lake ")]
+        return r
+
     def call(self, name, a):
         f = {"catalog": self.catalog, "describe_map": self.describe_map, "new_map": self.new_map, "import_map": self.import_map,
              "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile,
              "plan_terrain": self.plan_terrain, "generate_terrain": self.generate_terrain,
              "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation,
-             "set_material_rules": self.set_material_rules, "paint_materials": self.paint_materials, "material_report": self.material_report}.get(name)
+             "set_material_rules": self.set_material_rules, "paint_materials": self.paint_materials, "material_report": self.material_report,
+             "set_water": self.set_water, "water_report": self.water_report}.get(name)
         if not f:
             raise AuthorError({"error": "unknown tool " + str(name)})
         return f(a)

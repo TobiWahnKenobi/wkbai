@@ -749,9 +749,30 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			matBed = i;
 	if (matBed < 0)
 		matBed = mats.find(K_SAND, matCount);
-	const float seaBed = bedN ? bedSum / bedN : lo;
+	float seaBed = bedN ? bedSum / bedN : lo;
 	// (the map's own far land: its sea level when the map's edge has no sea of its own)
-	const float seaLevel = bedN ? levelSum / bedN : (map.farLand && map.farLand->seaLevel > -1e29f ? map.farLand->seaLevel : -1e30f);
+	float seaLevel = bedN ? levelSum / bedN : (map.farLand && map.farLand->seaLevel > -1e29f ? map.farLand->seaLevel : -1e30f);
+	// The map's far-land hints (WaterDesign::farland, its author's: the sea continuing, a range
+	// rising, a river leaving the map a way), weights over what the edge band alone says
+	const std::vector<WaterDesign::FarHint> hints = map.waterDesign ? map.waterDesign->farland : std::vector<WaterDesign::FarHint>();
+	bool seaHinted = false;
+	for (const WaterDesign::FarHint& hint : hints)
+		if (hint.kind == WaterDesign::FarHint::SEA && hint.weight > 0) {
+			seaHinted = true;
+			// a sea where the map's edge has none: at the hint's level, else just under the
+			// lowest of the map's border, its floor below that
+			if (seaLevel < -1e29f) {
+				float low = 1e30f;
+				for (int x = 0; x <= w; x++)
+					low = std::min({ low, mapV(x, 0), mapV(x, h) });
+				for (int z = 0; z <= h; z++)
+					low = std::min({ low, mapV(0, z), mapV(w, z) });
+				seaLevel = hint.level > -1e29f ? hint.level : low - 0.5f;
+				seaBed = std::min(seaBed, seaLevel - 3.0f - 0.05f * relief);
+			}
+		}
+	if (!hints.empty())
+		printf("Extend map: %zu far-land hints%s, sea level %.1f\n", hints.size(), seaHinted ? " (a sea among them)" : "", seaLevel > -1e29f ? seaLevel : -1.0f);
 	const StoredFarLand* store = map.farLand.get();
 	// a place of the copy (copy tiles) in the whole map's world units
 	auto storeAt = [&](float px, float pz, float& weight) { return store ? store->sample((px - n) * 5.0f, (pz - n) * 5.0f, weight) : (weight = 0, 0.0f); };
@@ -832,6 +853,31 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float band = std::min(wet * 3.0f, 1.0f) * std::min((1.0f - wet) * 3.0f, 1.0f);
 		return std::clamp(wet + 0.35f * band * Fbm(seed, px, pz, 26.0f, 3, 150, foot), 0.0f, 1.0f);
 	};
+	// A kind of hint's weight at a place (copy tiles): the strongest of its hints, by the way the
+	// place lies from the map's middle (within the hint's spread) and its distance beyond the
+	// map's edge (full from the hint's "from", coming in from the edge over that, at least 8
+	// tiles); the way warped a little, so a hinted coast or range doesn't run along a ray
+	const float midX = n + 0.5f * w, midZ = n + 0.5f * h;
+	auto hintAt = [&](WaterDesign::FarHint::Kind kind, float px, float pz, float d, float foot) {
+		float best = 0.0f;
+		for (const WaterDesign::FarHint& hint : hints) {
+			if (hint.kind != kind || hint.weight <= 0)
+				continue;
+			const float ang = std::atan2(pz - midZ, px - midX) * 57.2957795f + 14.0f * Fbm(seed, px, pz, 140.0f, 2, 340, foot);
+			const float r = std::clamp(d / std::max(hint.from, 8.0f), 0.0f, 1.0f);
+			best = std::max(best, hint.weight * hint.across(ang) * r * r * (3 - 2 * r));
+		}
+		return best;
+	};
+	// a place's sea and land hints over its wet share (the coast's noise on the hinted sea too)
+	auto hintedWet = [&](float wet, float px, float pz, float d, float foot) {
+		if (hints.empty())
+			return wet;
+		const float sea = hintAt(WaterDesign::FarHint::SEA, px, pz, d, foot);
+		if (sea > 0)
+			wet = std::max(wet, coastal(sea, px, pz, foot));
+		return wet * (1.0f - hintAt(WaterDesign::FarHint::LAND, px, pz, d, foot));
+	};
 	// A broad warp of where a place takes the map's edge from, growing with its distance from the
 	// map (none at the edge): the coasts and the ranges carried out from the map curve and wander
 	// instead of running straight out from it (the play test of 2026-11-11)
@@ -881,12 +927,16 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		bigWarp(px, pz, d, foot, wx, wz);
 		float bx, bz;
 		NearestOnBorder(wx, wz, (float)w, (float)h, bx, bz);
-		const float wet = coastal(std::clamp(at(wetB, bx, bz) * 1.6f, 0.0f, 1.0f), px, pz, foot);
+		const float wet = hintedWet(coastal(std::clamp(at(wetB, bx, bz) * 1.6f, 0.0f, 1.0f), px, pz, foot), px, pz, d, foot);
 		const float far = std::clamp((d - n) / 300.0f, 0.0f, 1.0f);
+		// (a hinted range: the land itself rises there; a hinted lowland: no wild relief)
+		const float mtnHint = hints.empty() ? 0.0f : hintAt(WaterDesign::FarHint::MOUNTAINS, px, pz, d, foot);
+		const float lowHint = hints.empty() ? 0.0f : hintAt(WaterDesign::FarHint::LOWLAND, px, pz, d, foot);
 		const float edge = std::max(at(wide, bx, bz), 0.85f * at(near5, bx, bz) + 0.15f * at(wide, bx, bz));
 		const float land = edge + (borderMean - edge) * 0.7f * wild
 			+ 0.2f * relief * Fbm(seed, px, pz, 60.0f, 2, 40, foot) + far * 0.45f * relief * Fbm(seed, px, pz, 420.0f, 3, 41, foot)
-			+ wild * (0.3f * relief + 0.35f * wildRelief) * Fbm(seed, px, pz, 300.0f, 3, 43, foot);
+			+ wild * (1 - lowHint) * (0.3f * relief + 0.35f * wildRelief) * Fbm(seed, px, pz, 300.0f, 3, 43, foot)
+			+ mtnHint * (1 - wet) * 0.18f * massifHeight;
 		const float sea = seaBed - 0.12f * relief - far * 0.1f * relief;
 		return land + (sea - land) * wet;
 	};
@@ -909,6 +959,16 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float roughness = at(rough, L.bx, L.bz);
 		L.wet = coastal(std::clamp(at(wetB, L.bx, L.bz) * 1.6f, 0.0f, 1.0f), px, pz, foot);
 		L.seaFrac = at(seaB, L.bx, L.bz) / std::max(at(wetB, L.bx, L.bz), 1e-3f);
+		float mtnHint = 0, lowHint = 0;
+		if (!hints.empty()) {
+			const float wet0 = L.wet;
+			L.wet = hintedWet(L.wet, px, pz, L.d, foot);
+			// (the hinted sea's water is the sea's)
+			if (L.wet > wet0)
+				L.seaFrac = L.seaFrac + (1.0f - L.seaFrac) * std::clamp((L.wet - wet0) / std::max(L.wet, 1e-3f), 0.0f, 1.0f);
+			mtnHint = hintAt(WaterDesign::FarHint::MOUNTAINS, px, pz, L.d, foot);
+			lowHint = hintAt(WaterDesign::FarHint::LOWLAND, px, pz, L.d, foot);
+		}
 		// the edge's own character fades out far away, where the land goes its own way
 		const float own = 1.0f - std::clamp((L.d - 2.0f * n) / 400.0f, 0.0f, 0.7f);
 		float mtn = own * std::clamp(std::max(rockiness, roughness / (0.04f * relief + 0.5f) - 0.6f), 0.0f, 1.0f);
@@ -916,9 +976,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			* std::clamp(L.d / 40.0f, 0.0f, 1.0f) * (1 - L.wet));
 		// far out, ranges of the land's own in a good share of it
 		const float wild = wildAt(L.d);
-		const float reliefW = relief + wild * wildRelief;
+		// (a hinted range: ranges at least as high as the far land's great massifs' outer parts)
+		const float reliefW = relief + wild * wildRelief + mtnHint * std::max(0.0f, 0.6f * massifHeight - relief);
 		// (dispersed: groups of mountains here and there, not ranges over half the land)
 		mtn = std::max(mtn, wild * std::clamp((Fbm(seed, px, pz, 75.0f, 3, 52, foot) - 0.12f) * 3.5f, 0.0f, 1.0f) * (1 - L.wet));
+		mtn = std::max(mtn, mtnHint * (1 - L.wet)) * (1 - lowHint);
 		L.mtn = mtn;
 		// a broad warp first (the ranges curve), then the forms: ranges as bands of ridges with
 		// valleys between them, worn hills
@@ -970,7 +1032,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		// A massif is a mountain region: ordinary ranges over its outer part, rising over a broad
 		// swell to the great peaks in its core (a lone great mountain out of flat land had looked
 		// wrong, the play test of 2026-11-11)
-		const float region = std::clamp((L.d - 250.0f) / 350.0f, 0.0f, 1.0f)
+		const float region = (1 - lowHint) * std::clamp((L.d - 250.0f) / 350.0f, 0.0f, 1.0f)
 			* std::clamp((Fbm(seed, px, pz, 520.0f, 2, 310, foot) - 0.05f) / 0.45f, 0.0f, 1.0f) * (1 - L.wet);
 		if (region > 0) {
 			const float foothills = std::clamp(region / 0.35f, 0.0f, 1.0f);
@@ -1215,6 +1277,25 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float half0 = std::clamp(ex.width * 0.5f, 1.5f, 7.0f);
 		float level = ex.level;
 		const float a0 = std::atan2(oz, ox);
+		// a river hint for this exit (the one nearest its point within 60 m, else every exit on
+		// the side it points to): the course turns its way over its first 15 steps, less wandering
+		float turnTo = 0.0f, turnW = 0.0f;
+		{
+			const float ex0 = (ex.side < 2 ? ex.along : (ex.side == 2 ? 0.0f : (float)w)) * 5.0f - map.edge * 5.0f;
+			const float ez0 = (ex.side < 2 ? (ex.side == 0 ? 0.0f : (float)h) : ex.along) * 5.0f - map.edge * 5.0f;
+			for (const WaterDesign::FarHint& hint : hints) {
+				if (hint.kind != WaterDesign::FarHint::RIVER || hint.weight <= turnW)
+					continue;
+				const float ha = hint.degrees / 57.2957795f;
+				if (hint.hasAt ? std::hypot(ex0 - hint.at.x, ez0 - hint.at.z) > 60.0f : ox * std::cos(ha) + oz * std::sin(ha) <= 0.3f)
+					continue;
+				// (never back into the map: at most 75 degrees off straight out)
+				turnTo = std::clamp(std::remainder(ha - a0, 6.2831853f), -1.309f, 1.309f);
+				turnW = hint.weight;
+			}
+			if (turnW > 0)
+				printf("Extend map: the river leaving at (%.0f, %.0f) turns %.0f degrees by a hint\n", ex0, ez0, turnTo * 57.2957795f);
+		}
 		const float phase = Unit(HashAt(seed, (int)r, 0, 91)) * 6.2832f;
 		// its valley: banks rising from the water at up to VALLEY_SLOPE units per tile, so the land
 		// opens up around the river instead of standing over it as walls
@@ -1228,9 +1309,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		struct Step { float x, z, half, ground; bool inCopy; };
 		std::vector<Step> course;
 		for (int s = 0; s < steps; s++) {
-			const float a = a0 + 0.85f * std::sin(s / 19.0f + phase) + 0.35f * std::sin(s / 7.3f + 2 * phase)
-				+ 0.75f * Fbm(seed, (float)s, (float)r * 37.0f, 30.0f, 2, 90)
-				+ 1.1f * Fbm(seed, (float)s, (float)r * 53.0f, 160.0f, 2, 92);
+			const float turn = turnW * std::min(s / 15.0f, 1.0f);
+			// (a hinted river still meanders, half as much, but no longer wanders off its way)
+			const float a = a0 + turnTo * turn + (1.0f - 0.5f * turnW) * (0.85f * std::sin(s / 19.0f + phase) + 0.35f * std::sin(s / 7.3f + 2 * phase))
+				+ (1.0f - 0.7f * turn) * 0.75f * Fbm(seed, (float)s, (float)r * 37.0f, 30.0f, 2, 90)
+				+ (1.0f - 0.85f * turn) * 1.1f * Fbm(seed, (float)s, (float)r * 53.0f, 160.0f, 2, 92);
 			px += std::cos(a);
 			pz += std::sin(a);
 			const bool inCopy = px >= 1 && pz >= 1 && px <= W - 1 && pz <= H - 1;
@@ -2108,6 +2191,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			}
 		for (const Vector3& l : map.lakes)
 			k.value(l);
+		if (map.waterDesign)
+			for (const WaterDesign::FarHint& hint : map.waterDesign->farland) {
+				k.value((int)hint.kind); k.value(hint.degrees); k.value(hint.spread); k.value(hint.from); k.value(hint.weight);
+				k.value(hint.hasAt); k.value(hint.at); k.value(hint.level);
+			}
 		k.value(M);
 		for (int i = 0; i < M; i++) {
 			k.value(mats.colour[i]);
