@@ -965,6 +965,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 		uint8_t category;
 		Bitmap mask; // alpha of the image, for hit tests on the arc
 		texture tex = nullptr;
+		bool loaded = false; // tried once (the null renderer's textures are null: it loaded the four every frame)
 		int cx = 0, cy = 0; // a point inside the arc (agent control's registry)
 	};
 	static MinimapButton buttons[] = {
@@ -976,7 +977,8 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 	ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 	bool hoveredAny = false;
 	for (MinimapButton& button : buttons) {
-		if (!button.tex) {
+		if (!button.loaded) {
+			button.loaded = true;
 			if (!FileExists(button.image))
 				continue;
 			button.mask = Bitmap::loadBitmap(button.image).convertToR8G8B8A8();
@@ -997,6 +999,8 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 						}
 			}
 		}
+		if (!button.mask.width) // (its image missing)
+			continue;
 		// agent control: a small box inside the arc (the click is hit-tested on the image)
 		{
 			static const char* const names[] = { "military", "economic", "resource", "activity" };
