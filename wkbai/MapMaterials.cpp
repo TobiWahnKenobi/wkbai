@@ -754,6 +754,191 @@ namespace {
 	}
 }
 
+namespace {
+	// the land's fields per vertex, which the rules read (and the scatter's forests by moisture)
+	struct LandFields {
+		std::vector<float> h, slope, curv, seaDist, river, drain, moist;
+		std::vector<uint8_t> wet;
+		float seaLevel = -1e9f, lo = 0, hi = 1, range = 1;
+		int riverCount = 0;
+		bool moistFromLayer = false;
+	};
+	LandFields ComputeLand(const std::filesystem::path& folder, const json& mapJson, const json& ground, uint32_t seed, const Terrain& t)
+	{
+		const int W = t.width, H = t.height, E = t.edge, gw = W + 1, gh = H + 1;
+		const size_t NV = (size_t)gw * gh;
+		LandFields F;
+		auto& h = F.h; auto& slope = F.slope; auto& curv = F.curv; auto& seaDist = F.seaDist; auto& river = F.river; auto& drain = F.drain;
+		auto& moist = F.moist; auto& wet = F.wet; auto& seaLevel = F.seaLevel; auto& lo = F.lo; auto& hi = F.hi; auto& range = F.range;
+		auto& riverCount = F.riverCount; auto& moistFromLayer = F.moistFromLayer;
+		(void)E;
+		// ---- the land, per vertex ----
+		h.assign(NV, 0.0f); slope.assign(NV, 0.0f); curv.assign(NV, 0.0f);
+		for (int z = 0; z < gh; z++)
+			for (int x = 0; x < gw; x++)
+				h[(size_t)z * gw + x] = t.getVertex(x, z);
+		auto H_ = [&](int x, int z) { return h[(size_t)std::clamp(z, 0, gh - 1) * gw + std::clamp(x, 0, gw - 1)]; };
+		for (int z = 0; z < gh; z++)
+			for (int x = 0; x < gw; x++) {
+				// the mean of the four tiles round the vertex, each as the game measures it (its corners'
+				// spread over 5 m: above 45 degrees most units can't stand there)
+				float steep = 0;
+				for (int oz = -1; oz <= 0; oz++)
+					for (int ox = -1; ox <= 0; ox++) {
+						const float a = H_(x + ox, z + oz), b = H_(x + ox + 1, z + oz), c = H_(x + ox + 1, z + oz + 1), d = H_(x + ox, z + oz + 1);
+						steep += std::atan((std::max({ a, b, c, d }) - std::min({ a, b, c, d })) / TILE) * 0.25f;
+					}
+				slope[(size_t)z * gw + x] = steep * 180.0f / 3.14159265f;
+				float s = 0;
+				int n = 0;
+				for (int oz = -2; oz <= 2; oz++)
+					for (int ox = -2; ox <= 2; ox++) { s += H_(x + ox, z + oz); n++; }
+				curv[(size_t)z * gw + x] = H_(x, z) - s / n;
+			}
+		// water: vertices at a tile full of water
+		wet.assign(NV, 0);
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++)
+				if (t.tiles[(size_t)z * W + x].fullOfWater)
+					for (int k = 0; k < 4; k++) wet[(size_t)(z + (k >> 1)) * gw + x + (k & 1)] = 1;
+		// the sea level (the generator's, else the plan's)
+		seaLevel = -1e9f;
+		const json terrainJ = mapJson.value("terrain", json::object());
+		if (terrainJ.contains("generated") && terrainJ["generated"].is_object() && terrainJ["generated"].contains("seaLevel") && terrainJ["generated"]["seaLevel"].is_number())
+			seaLevel = terrainJ["generated"]["seaLevel"].get<float>();
+		else if (terrainJ.contains("seaLevel") && terrainJ["seaLevel"].is_number())
+			seaLevel = terrainJ["seaLevel"].get<float>();
+		// the playable land's height range (above the sea), for heightRel
+		lo = 1e9f; hi = -1e9f;
+		for (int z = E; z <= H - E; z++)
+			for (int x = E; x <= W - E; x++) {
+				const float v = h[(size_t)z * gw + x];
+				if (wet[(size_t)z * gw + x] || v < seaLevel) continue;
+				lo = std::min(lo, v);
+				hi = std::max(hi, v);
+			}
+		if (lo > hi) { lo = 0; hi = 1; }
+		range = std::max(hi - lo, 1.0f);
+		seaDist = Distance(wet, gw, gh);
+		// fresh water (a lake above the sea's level) waters the land round it more than the sea
+		std::vector<uint8_t> fresh(NV, 0);
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				const TerrainTile& tile = t.tiles[(size_t)z * W + x];
+				if (tile.fullOfWater && (seaLevel < -1e8f || std::abs(tile.waterLevel - seaLevel) > 1.0f))
+					for (int k = 0; k < 4; k++) fresh[(size_t)(z + (k >> 1)) * gw + x + (k & 1)] = 1;
+			}
+		const std::vector<float> freshDist = Distance(fresh, gw, gh);
+		// the rivers the generator carved: the distance to the course in half-widths
+		river.assign(NV, 1e9f);
+		std::vector<uint8_t> riverSrc(NV, 0);
+		riverCount = 0;
+		if (terrainJ.contains("generated") && terrainJ["generated"].contains("rivers") && terrainJ["generated"]["rivers"].is_array())
+			for (const json& rv : terrainJ["generated"]["rivers"]) {
+				const float hw = std::max(2.0f, Num(rv, "width", 20) / 2);
+				const json& c = rv.value("course", json::array());
+				if (c.size() < 2) continue;
+				riverCount++;
+				for (size_t i = 0; i + 1 < c.size(); i++) {
+					const float ax = c[i][0].get<float>(), az = c[i][1].get<float>(), bx = c[i + 1][0].get<float>(), bz = c[i + 1][1].get<float>();
+					const float reach = hw * 3 + 10;
+					const int x0 = std::max(0, (int)((std::min(ax, bx) - reach) / TILE) + E), x1 = std::min(gw - 1, (int)((std::max(ax, bx) + reach) / TILE) + E + 1);
+					const int z0 = std::max(0, (int)((std::min(az, bz) - reach) / TILE) + E), z1 = std::min(gh - 1, (int)((std::max(az, bz) + reach) / TILE) + E + 1);
+					const float abx = bx - ax, abz = bz - az, len2 = std::max(abx * abx + abz * abz, 1e-6f);
+					for (int z = z0; z <= z1; z++)
+						for (int x = x0; x <= x1; x++) {
+							const float px = (x - E) * TILE, pz = (z - E) * TILE;
+							const float u = std::clamp(((px - ax) * abx + (pz - az) * abz) / len2, 0.0f, 1.0f);
+							const float dxp = px - (ax + abx * u), dzp = pz - (az + abz * u);
+							const float d = std::sqrt(dxp * dxp + dzp * dzp) / hw;
+							float& rv2 = river[(size_t)z * gw + x];
+							rv2 = std::min(rv2, d);
+							if (d <= 1) riverSrc[(size_t)z * gw + x] = 1;
+						}
+				}
+			}
+		const std::vector<float> riverDist = Distance(riverSrc, gw, gh);
+		// drainage: each vertex's water flows to its lowest neighbour (the land as the erosion left it)
+		std::vector<float> acc(NV, 1.0f);
+		{
+			std::vector<uint32_t> order(NV);
+			for (size_t i = 0; i < NV; i++) order[i] = (uint32_t)i;
+			std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return h[a] > h[b] || (h[a] == h[b] && a < b); });
+			for (uint32_t i : order) {
+				const int x = (int)(i % gw), z = (int)(i / gw);
+				float best = h[i];
+				int bi = -1;
+				for (int oz = -1; oz <= 1; oz++)
+					for (int ox = -1; ox <= 1; ox++) {
+						const int nx = x + ox, nz = z + oz;
+						if ((!ox && !oz) || nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
+						const float d = (h[(size_t)nz * gw + nx] - h[i]) / ((ox && oz) ? 1.41421356f : 1.0f);
+						if (h[i] + d < best) { best = h[i] + d; bi = nz * gw + nx; }
+					}
+				if (bi >= 0 && !wet[i]) acc[bi] += acc[i];
+			}
+		}
+		drain.assign(NV, 0.0f);
+		{
+			float maxLog = 1;
+			for (size_t i = 0; i < NV; i++) maxLog = std::max(maxLog, std::log(acc[i]));
+			// a 3 x 3 blur, so a channel is a band, not a line of vertices
+			for (int z = 0; z < gh; z++)
+				for (int x = 0; x < gw; x++) {
+					float s = 0;
+					int n = 0;
+					for (int oz = -1; oz <= 1; oz++)
+						for (int ox = -1; ox <= 1; ox++) {
+							const int nx = x + ox, nz = z + oz;
+							if (nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
+							s += std::log(acc[(size_t)nz * gw + nx]);
+							n++;
+						}
+					drain[(size_t)z * gw + x] = std::clamp(s / n / (maxLog * 0.75f), 0.0f, 1.0f);
+				}
+		}
+		// moisture: a base, more near water and rivers, along the drainage, in valleys (below the land
+		// round them, 80 m), and a slow noise; or the map's own layer
+		moist.assign(NV, 0.0f);
+		const json mo = ground.value("moisture", json::object());
+		const float waterReach = Num(mo, "waterReachM", 180), riverReach = Num(mo, "riverReachM", 140), drainW = Num(mo, "drainage", 0.3f),
+			moistNoise = Num(mo, "noise", 0.12f), moistBase = Num(mo, "base", 0.3f), valleyW = Num(mo, "valleys", 0.25f),
+			seaWet = Num(mo, "sea", 0.45f);
+		// the land round each vertex: a box blur 16 vertices out (prefix sums)
+		std::vector<float> broad(NV);
+		{
+			const int R = 16;
+			std::vector<double> sum((size_t)(gw + 1) * (gh + 1), 0.0);
+			for (int z = 0; z < gh; z++)
+				for (int x = 0; x < gw; x++)
+					sum[(size_t)(z + 1) * (gw + 1) + x + 1] = h[(size_t)z * gw + x] + sum[(size_t)z * (gw + 1) + x + 1] + sum[(size_t)(z + 1) * (gw + 1) + x] - sum[(size_t)z * (gw + 1) + x];
+			for (int z = 0; z < gh; z++)
+				for (int x = 0; x < gw; x++) {
+					const int x0 = std::max(0, x - R), x1 = std::min(gw - 1, x + R), z0 = std::max(0, z - R), z1 = std::min(gh - 1, z + R);
+					const double s = sum[(size_t)(z1 + 1) * (gw + 1) + x1 + 1] - sum[(size_t)z0 * (gw + 1) + x1 + 1] - sum[(size_t)(z1 + 1) * (gw + 1) + x0] + sum[(size_t)z0 * (gw + 1) + x0];
+					broad[(size_t)z * gw + x] = (float)(s / ((double)(x1 - x0 + 1) * (z1 - z0 + 1)));
+				}
+		}
+		std::vector<float> moistLayer;
+		moistFromLayer = ReadMask(folder / "layers" / "moisture.png", gw, gh, moistLayer);
+		for (int z = 0; z < gh; z++)
+			for (int x = 0; x < gw; x++) {
+				const size_t i = (size_t)z * gw + x;
+				if (moistFromLayer) { moist[i] = moistLayer[i]; continue; }
+				const float px = (x - E) * TILE, pz = (z - E) * TILE;
+				const float near = std::max({ seaWet * std::exp(-seaDist[i] / waterReach), std::exp(-freshDist[i] / waterReach), std::exp(-riverDist[i] / riverReach) });
+				const float valley = std::clamp((broad[i] - h[i]) / 12.0f, -1.0f, 1.0f);
+				moist[i] = std::clamp(moistBase + 0.55f * near + drainW * drain[i] + valleyW * valley + moistNoise * Fbm(px / 300, pz / 300, 3, seed ^ 0x6d6f6973u), 0.0f, 1.0f);
+			}
+		return F;
+	}
+}
+
+std::vector<float> Moisture(const std::filesystem::path& folder, const json& mapJson, uint32_t seed, const Terrain& t)
+{
+	return ComputeLand(folder, mapJson, mapJson.value("ground", json::object()), seed, t).moist;
+}
+
 bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t seed, Terrain& t, const std::vector<uint8_t>& hand,
 	json& report, std::vector<std::string>& warnings, std::vector<uint8_t>& ruleTile, std::string& error)
 {
@@ -911,164 +1096,12 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		rules.push_back(r);
 	}
 
-	// ---- the land, per vertex ----
-	std::vector<float> h(NV), slope(NV), curv(NV);
-	for (int z = 0; z < gh; z++)
-		for (int x = 0; x < gw; x++)
-			h[(size_t)z * gw + x] = t.getVertex(x, z);
-	auto H_ = [&](int x, int z) { return h[(size_t)std::clamp(z, 0, gh - 1) * gw + std::clamp(x, 0, gw - 1)]; };
-	for (int z = 0; z < gh; z++)
-		for (int x = 0; x < gw; x++) {
-			// the mean of the four tiles round the vertex, each as the game measures it (its corners'
-			// spread over 5 m: above 45 degrees most units can't stand there)
-			float steep = 0;
-			for (int oz = -1; oz <= 0; oz++)
-				for (int ox = -1; ox <= 0; ox++) {
-					const float a = H_(x + ox, z + oz), b = H_(x + ox + 1, z + oz), c = H_(x + ox + 1, z + oz + 1), d = H_(x + ox, z + oz + 1);
-					steep += std::atan((std::max({ a, b, c, d }) - std::min({ a, b, c, d })) / TILE) * 0.25f;
-				}
-			slope[(size_t)z * gw + x] = steep * 180.0f / 3.14159265f;
-			float s = 0;
-			int n = 0;
-			for (int oz = -2; oz <= 2; oz++)
-				for (int ox = -2; ox <= 2; ox++) { s += H_(x + ox, z + oz); n++; }
-			curv[(size_t)z * gw + x] = H_(x, z) - s / n;
-		}
-	// water: vertices at a tile full of water
-	std::vector<uint8_t> wet(NV, 0);
-	for (int z = 0; z < H; z++)
-		for (int x = 0; x < W; x++)
-			if (t.tiles[(size_t)z * W + x].fullOfWater)
-				for (int k = 0; k < 4; k++) wet[(size_t)(z + (k >> 1)) * gw + x + (k & 1)] = 1;
-	// the sea level (the generator's, else the plan's)
-	float seaLevel = -1e9f;
-	const json terrainJ = mapJson.value("terrain", json::object());
-	if (terrainJ.contains("generated") && terrainJ["generated"].is_object() && terrainJ["generated"].contains("seaLevel") && terrainJ["generated"]["seaLevel"].is_number())
-		seaLevel = terrainJ["generated"]["seaLevel"].get<float>();
-	else if (terrainJ.contains("seaLevel") && terrainJ["seaLevel"].is_number())
-		seaLevel = terrainJ["seaLevel"].get<float>();
-	// the playable land's height range (above the sea), for heightRel
-	float lo = 1e9f, hi = -1e9f;
-	for (int z = E; z <= H - E; z++)
-		for (int x = E; x <= W - E; x++) {
-			const float v = h[(size_t)z * gw + x];
-			if (wet[(size_t)z * gw + x] || v < seaLevel) continue;
-			lo = std::min(lo, v);
-			hi = std::max(hi, v);
-		}
-	if (lo > hi) { lo = 0; hi = 1; }
-	const float range = std::max(hi - lo, 1.0f);
-	const std::vector<float> seaDist = Distance(wet, gw, gh);
-	// fresh water (a lake above the sea's level) waters the land round it more than the sea
-	std::vector<uint8_t> fresh(NV, 0);
-	for (int z = 0; z < H; z++)
-		for (int x = 0; x < W; x++) {
-			const TerrainTile& tile = t.tiles[(size_t)z * W + x];
-			if (tile.fullOfWater && (seaLevel < -1e8f || std::abs(tile.waterLevel - seaLevel) > 1.0f))
-				for (int k = 0; k < 4; k++) fresh[(size_t)(z + (k >> 1)) * gw + x + (k & 1)] = 1;
-		}
-	const std::vector<float> freshDist = Distance(fresh, gw, gh);
-	// the rivers the generator carved: the distance to the course in half-widths
-	std::vector<float> river(NV, 1e9f);
-	std::vector<uint8_t> riverSrc(NV, 0);
-	int riverCount = 0;
-	if (terrainJ.contains("generated") && terrainJ["generated"].contains("rivers") && terrainJ["generated"]["rivers"].is_array())
-		for (const json& rv : terrainJ["generated"]["rivers"]) {
-			const float hw = std::max(2.0f, Num(rv, "width", 20) / 2);
-			const json& c = rv.value("course", json::array());
-			if (c.size() < 2) continue;
-			riverCount++;
-			for (size_t i = 0; i + 1 < c.size(); i++) {
-				const float ax = c[i][0].get<float>(), az = c[i][1].get<float>(), bx = c[i + 1][0].get<float>(), bz = c[i + 1][1].get<float>();
-				const float reach = hw * 3 + 10;
-				const int x0 = std::max(0, (int)((std::min(ax, bx) - reach) / TILE) + E), x1 = std::min(gw - 1, (int)((std::max(ax, bx) + reach) / TILE) + E + 1);
-				const int z0 = std::max(0, (int)((std::min(az, bz) - reach) / TILE) + E), z1 = std::min(gh - 1, (int)((std::max(az, bz) + reach) / TILE) + E + 1);
-				const float abx = bx - ax, abz = bz - az, len2 = std::max(abx * abx + abz * abz, 1e-6f);
-				for (int z = z0; z <= z1; z++)
-					for (int x = x0; x <= x1; x++) {
-						const float px = (x - E) * TILE, pz = (z - E) * TILE;
-						const float u = std::clamp(((px - ax) * abx + (pz - az) * abz) / len2, 0.0f, 1.0f);
-						const float dxp = px - (ax + abx * u), dzp = pz - (az + abz * u);
-						const float d = std::sqrt(dxp * dxp + dzp * dzp) / hw;
-						float& rv2 = river[(size_t)z * gw + x];
-						rv2 = std::min(rv2, d);
-						if (d <= 1) riverSrc[(size_t)z * gw + x] = 1;
-					}
-			}
-		}
-	const std::vector<float> riverDist = Distance(riverSrc, gw, gh);
-	// drainage: each vertex's water flows to its lowest neighbour (the land as the erosion left it)
-	std::vector<float> acc(NV, 1.0f);
-	{
-		std::vector<uint32_t> order(NV);
-		for (size_t i = 0; i < NV; i++) order[i] = (uint32_t)i;
-		std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return h[a] > h[b] || (h[a] == h[b] && a < b); });
-		for (uint32_t i : order) {
-			const int x = (int)(i % gw), z = (int)(i / gw);
-			float best = h[i];
-			int bi = -1;
-			for (int oz = -1; oz <= 1; oz++)
-				for (int ox = -1; ox <= 1; ox++) {
-					const int nx = x + ox, nz = z + oz;
-					if ((!ox && !oz) || nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
-					const float d = (h[(size_t)nz * gw + nx] - h[i]) / ((ox && oz) ? 1.41421356f : 1.0f);
-					if (h[i] + d < best) { best = h[i] + d; bi = nz * gw + nx; }
-				}
-			if (bi >= 0 && !wet[i]) acc[bi] += acc[i];
-		}
-	}
-	std::vector<float> drain(NV);
-	{
-		float maxLog = 1;
-		for (size_t i = 0; i < NV; i++) maxLog = std::max(maxLog, std::log(acc[i]));
-		// a 3 x 3 blur, so a channel is a band, not a line of vertices
-		for (int z = 0; z < gh; z++)
-			for (int x = 0; x < gw; x++) {
-				float s = 0;
-				int n = 0;
-				for (int oz = -1; oz <= 1; oz++)
-					for (int ox = -1; ox <= 1; ox++) {
-						const int nx = x + ox, nz = z + oz;
-						if (nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
-						s += std::log(acc[(size_t)nz * gw + nx]);
-						n++;
-					}
-				drain[(size_t)z * gw + x] = std::clamp(s / n / (maxLog * 0.75f), 0.0f, 1.0f);
-			}
-	}
-	// moisture: a base, more near water and rivers, along the drainage, in valleys (below the land
-	// round them, 80 m), and a slow noise; or the map's own layer
-	std::vector<float> moist(NV);
-	const json mo = ground.value("moisture", json::object());
-	const float waterReach = Num(mo, "waterReachM", 180), riverReach = Num(mo, "riverReachM", 140), drainW = Num(mo, "drainage", 0.3f),
-		moistNoise = Num(mo, "noise", 0.12f), moistBase = Num(mo, "base", 0.3f), valleyW = Num(mo, "valleys", 0.25f),
-		seaWet = Num(mo, "sea", 0.45f);
-	// the land round each vertex: a box blur 16 vertices out (prefix sums)
-	std::vector<float> broad(NV);
-	{
-		const int R = 16;
-		std::vector<double> sum((size_t)(gw + 1) * (gh + 1), 0.0);
-		for (int z = 0; z < gh; z++)
-			for (int x = 0; x < gw; x++)
-				sum[(size_t)(z + 1) * (gw + 1) + x + 1] = h[(size_t)z * gw + x] + sum[(size_t)z * (gw + 1) + x + 1] + sum[(size_t)(z + 1) * (gw + 1) + x] - sum[(size_t)z * (gw + 1) + x];
-		for (int z = 0; z < gh; z++)
-			for (int x = 0; x < gw; x++) {
-				const int x0 = std::max(0, x - R), x1 = std::min(gw - 1, x + R), z0 = std::max(0, z - R), z1 = std::min(gh - 1, z + R);
-				const double s = sum[(size_t)(z1 + 1) * (gw + 1) + x1 + 1] - sum[(size_t)z0 * (gw + 1) + x1 + 1] - sum[(size_t)(z1 + 1) * (gw + 1) + x0] + sum[(size_t)z0 * (gw + 1) + x0];
-				broad[(size_t)z * gw + x] = (float)(s / ((double)(x1 - x0 + 1) * (z1 - z0 + 1)));
-			}
-	}
-	std::vector<float> moistLayer;
-	const bool moistFromLayer = ReadMask(folder / "layers" / "moisture.png", gw, gh, moistLayer);
-	for (int z = 0; z < gh; z++)
-		for (int x = 0; x < gw; x++) {
-			const size_t i = (size_t)z * gw + x;
-			if (moistFromLayer) { moist[i] = moistLayer[i]; continue; }
-			const float px = (x - E) * TILE, pz = (z - E) * TILE;
-			const float near = std::max({ seaWet * std::exp(-seaDist[i] / waterReach), std::exp(-freshDist[i] / waterReach), std::exp(-riverDist[i] / riverReach) });
-			const float valley = std::clamp((broad[i] - h[i]) / 12.0f, -1.0f, 1.0f);
-			moist[i] = std::clamp(moistBase + 0.55f * near + drainW * drain[i] + valleyW * valley + moistNoise * Fbm(px / 300, pz / 300, 3, seed ^ 0x6d6f6973u), 0.0f, 1.0f);
-		}
+	// ---- the land, per vertex (ComputeLand) ----
+	LandFields F = ComputeLand(folder, mapJson, ground, seed, t);
+	auto& h = F.h; auto& slope = F.slope; auto& curv = F.curv; auto& seaDist = F.seaDist; auto& river = F.river; auto& drain = F.drain;
+	auto& moist = F.moist; auto& wet = F.wet; const float seaLevel = F.seaLevel; const float lo = F.lo, hi = F.hi, range = F.range;
+	const int riverCount = F.riverCount; const bool moistFromLayer = F.moistFromLayer;
+	(void)hi;
 	// masks the rules name
 	std::map<std::string, std::vector<float>> masks;
 	for (const Rule& r : rules)

@@ -10,6 +10,9 @@
 #include "SaveFile.h"
 #include "WaterDesign.h"
 #include "MapWater.h"
+#include "MapObjects.h"
+#include "gameset/gameset.h"
+#include "gameset/GameObjBlueprint.h"
 #include "Environment.h"
 #include "TrnTextureDb.h"
 #include "settings.h"
@@ -120,6 +123,8 @@ namespace {
 		float x = 0, z = 0;
 		std::string base = "Manor";
 		int peasants = 4;
+		bool autoStart = false;          // "start": "auto": the compiler chooses it (MapObjects.h)
+		json buildings;                  // the base's buildings (null: bases.buildings)
 	};
 	struct MapJson {
 		int width = 0, height = 0, edge = 30;
@@ -186,13 +191,17 @@ namespace {
 				MapPlayer mp;
 				mp.name = p.value("name", "Player " + std::to_string(m.players.size() + 1));
 				mp.colour = p.value("colour", (int)m.players.size() + 1);
-				if (p.contains("start")) {
+				if (p.contains("start") && p["start"].is_string())
+					mp.autoStart = p["start"].get<std::string>() == "auto";
+				else if (p.contains("start")) {
 					mp.hasStart = true;
 					mp.x = p["start"][0].get<float>();
 					mp.z = p["start"][1].get<float>();
 				}
 				mp.base = p.value("base", mp.base);
 				mp.peasants = p.value("peasants", mp.peasants);
+				if (p.contains("buildings"))
+					mp.buildings = p["buildings"];
 				m.players.push_back(mp);
 			}
 		}
@@ -614,7 +623,10 @@ namespace {
 			return a;
 		for (const json& p : j.value("players", json::array()))
 			a.players.push_back(p.get<uint32_t>());
-		for (const auto& [id, rule] : j.value("objects", json::object()).items()) {
+		// (a named copy: items() of the temporary j.value() returned dangled, and the objects came
+		// back empty, so a hand-edited level kept every rule's objects and got them made again)
+		const json objects = j.value("objects", json::object());
+		for (const auto& [id, rule] : objects.items()) {
 			const uint32_t oid = (uint32_t)strtoul(id.c_str(), nullptr, 10);
 			if (rule.is_object()) {
 				a.objects[oid] = rule.value("by", "");
@@ -964,7 +976,8 @@ namespace {
 	}
 
 	int Scatter(const fs::path& folder, const MapJson& m, const Terrain& terrain, std::vector<std::string>& lines, Authoring& auth,
-		std::map<std::string, std::vector<uint32_t>>& idsOf, uint32_t& next, std::vector<std::string>& warnings, json& report)
+		std::map<std::string, std::vector<uint32_t>>& idsOf, uint32_t& next, std::vector<std::string>& warnings, json& report,
+		MapObjects::PlacementState* ps, const std::vector<std::pair<float, float>>& basesAt)
 	{
 		const json rules = m.raw.value("scatter", json::array());
 		if (!rules.is_array() || rules.empty())
@@ -981,10 +994,15 @@ namespace {
 			warnings.push_back("scatter: the level has no Neutral Player");
 			return 0;
 		}
+		CommonGameObject* neutralObj = nullptr;
+		if (ps)
+			if (auto it = ps->players.find(neutral); it != ps->players.end())
+				neutralObj = it->second;
 		std::vector<std::string> materialWarnings;
 		const json data = MapMaterials::LoadMaterials(m.textureDb, m.raw, materialWarnings);
 		const int W = terrain.width, H = terrain.height, E = terrain.edge;
 		const float pw = (W - 2 * E) * 5.0f, ph = (H - 2 * E) * 5.0f;
+		const int ptw = W - 2 * E, pth = H - 2 * E;
 		// taken places, on a 4 m grid
 		std::set<std::pair<int, int>> taken;
 		auto free = [&](float x, float z, float r) {
@@ -996,10 +1014,29 @@ namespace {
 			return true;
 		};
 		auto take = [&](float x, float z) { taken.insert({ (int)(x / 4), (int)(z / 4) }); };
-		// the bases (map.json's starts), kept clear
-		std::vector<std::pair<float, float>> bases;
-		for (const MapPlayer& p : m.players)
-			if (p.hasStart) bases.push_back({ p.x, p.z });
+		// the bases (the civic centres placed, else map.json's starts), kept clear
+		std::vector<std::pair<float, float>> bases = basesAt;
+		if (bases.empty())
+			for (const MapPlayer& p : m.players)
+				if (p.hasStart) bases.push_back({ p.x, p.z });
+		// with the placement state: no object on a building's tile or beside it, none in a town (its
+		// city rectangles and two tiles round them)
+		std::vector<uint8_t> blockedTile;
+		if (ps) {
+			blockedTile.assign((size_t)ptw * pth, 0);
+			for (int z = 0; z < pth; z++)
+				for (int x = 0; x < ptw; x++)
+					if (ps->tiles[(size_t)z * ptw + x].building.getFrom(ps))
+						for (int dz = -1; dz <= 1; dz++)
+							for (int dx = -1; dx <= 1; dx++)
+								if (x + dx >= 0 && z + dz >= 0 && x + dx < ptw && z + dz < pth) blockedTile[(size_t)(z + dz) * ptw + x + dx] = 1;
+			for (const auto& o : ps->owned)
+				if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+					for (const auto& r : o->cityRectangles)
+						for (int z = std::max(0, r.yStart - 2); z <= std::min(pth - 1, r.yEnd + 2); z++)
+							for (int x = std::max(0, r.xStart - 2); x <= std::min(ptw - 1, r.xEnd + 2); x++)
+								blockedTile[(size_t)z * ptw + x] = 1;
+		}
 		auto tileAt = [&](float x, float z) { return terrain.getTile((int)(x / 5) + E, (int)(z / 5) + E); };
 		auto slopeDeg = [&](float x, float z) {
 			const int tx = (int)(x / 5) + E, tz = (int)(z / 5) + E;
@@ -1010,6 +1047,7 @@ namespace {
 			if (x < 2 || z < 2 || x > pw - 2 || z > ph - 2) return false;
 			const TerrainTile* t = tileAt(x, z);
 			if (!t || t->fullOfWater) return false;
+			if (!blockedTile.empty() && blockedTile[(size_t)(int)(z / 5) * ptw + (int)(x / 5)]) return false;
 			// not beside water either (a tree in the river's edge)
 			for (int dz = -1; dz <= 1; dz++)
 				for (int dx = -1; dx <= 1; dx++) {
@@ -1018,35 +1056,48 @@ namespace {
 				}
 			return slopeDeg(x, z) <= maxSlope;
 		};
+		// the moisture (MapMaterials::Moisture), made when a rule asks for it
+		std::vector<float> moisture;
+		auto moistureAt = [&](float x, float z) {
+			if (moisture.empty())
+				moisture = MapMaterials::Moisture(folder, m.raw, m.seed, terrain);
+			const int vx = std::clamp((int)std::lround(x / 5) + E, 0, W), vz = std::clamp((int)std::lround(z / 5) + E, 0, H);
+			return moisture[(size_t)vz * (W + 1) + vx];
+		};
 		std::vector<std::string> block;
 		int made = 0;
-		json counts = json::object();
-		for (size_t ri = 0; ri < rules.size(); ri++) {
+		json counts = json::object(), nearBases = json::object(), moistureRep = json::object();
+		std::set<std::string> unknownBp;
+		// the bases' own groups first (gold, stone, woodlots by every base), then the rest in their
+		// order: a forest laid first had taken the ground a base's gold needed
+		std::vector<size_t> order;
+		auto byBases = [&](const json& r) {
+			return r.is_object() && r.value("near", "") == "bases" && !r.contains("on") && !r.contains("moisture") && !r.contains("densityMask");
+		};
+		for (size_t ri = 0; ri < rules.size(); ri++) if (byBases(rules[ri])) order.push_back(ri);
+		for (size_t ri = 0; ri < rules.size(); ri++) if (!byBases(rules[ri])) order.push_back(ri);
+		for (const size_t ri : order) {
 			const json& r = rules[ri];
 			if (!r.is_object()) continue;
 			const std::string id = r.value("id", "scatter" + std::to_string(ri));
 			const std::string rule = "scatter:" + id;
 			if (auth.suppressed.count(rule)) continue;
 			// the objects: [blueprint, [subtypes]]
-			std::vector<std::pair<std::string, std::vector<std::string>>> objects;
-			for (const json& o : r.value("objects", json::array())) {
-				if (o.is_string()) objects.push_back({ o.get<std::string>(), {} });
-				else if (o.is_array() && !o.empty() && o[0].is_string()) {
-					std::vector<std::string> sub;
-					if (o.size() > 1 && o[1].is_array()) for (const json& st : o[1]) if (st.is_string()) sub.push_back(st.get<std::string>());
-					objects.push_back({ o[0].get<std::string>(), sub });
+			auto readObjects = [&](const char* key) {
+				std::vector<std::pair<std::string, std::vector<std::string>>> list;
+				for (const json& o : r.value(key, json::array())) {
+					if (o.is_string()) list.push_back({ o.get<std::string>(), {} });
+					else if (o.is_array() && !o.empty() && o[0].is_string()) {
+						std::vector<std::string> sub;
+						if (o.size() > 1 && o[1].is_array()) for (const json& st : o[1]) if (st.is_string()) sub.push_back(st.get<std::string>());
+						list.push_back({ o[0].get<std::string>(), sub });
+					}
 				}
-			}
+				return list;
+			};
+			const auto objects = readObjects("objects");
 			if (objects.empty()) { warnings.push_back(rule + ": no objects"); continue; }
-			std::vector<std::pair<std::string, std::vector<std::string>>> objectsHigh;
-			for (const json& o : r.value("objectsHigh", json::array())) {
-				if (o.is_string()) objectsHigh.push_back({ o.get<std::string>(), {} });
-				else if (o.is_array() && !o.empty() && o[0].is_string()) {
-					std::vector<std::string> sub;
-					if (o.size() > 1 && o[1].is_array()) for (const json& st : o[1]) if (st.is_string()) sub.push_back(st.get<std::string>());
-					objectsHigh.push_back({ o[0].get<std::string>(), sub });
-				}
-			}
+			const auto objectsHigh = readObjects("objectsHigh");
 			const float highFrom = r.value("highFrom", 0.0f), highTo = r.value("highTo", 1.0f), highMin = r.value("highMin", 0.0f), highMax = r.value("highMax", 1.0f);
 			// "highMask": a layer (layers\<name>.png) giving the share of objectsHigh instead of the
 			// height (a real map's conifer share by wood, from a forest inventory)
@@ -1056,10 +1107,22 @@ namespace {
 				if (!MapMaterials::ReadMaskLayer(folder / "layers" / (mk + ".png"), W + 1, H + 1, highMask))
 					warnings.push_back(rule + ": no mask layers/" + mk + ".png (the height decides)");
 			}
+			// "densityMask": a layer (0-1) the density is multiplied by
+			std::vector<float> densityMask;
+			if (r.contains("densityMask") && r["densityMask"].is_string()) {
+				const std::string mk = r["densityMask"].get<std::string>();
+				if (!MapMaterials::ReadMaskLayer(folder / "layers" / (mk + ".png"), W + 1, H + 1, densityMask))
+					warnings.push_back(rule + ": no mask layers/" + mk + ".png (left out)");
+			}
+			// "moisture": [from, to]: the density rises from nothing at `from` to full at `to` (a
+			// forest by moisture; from > to: a dry-ground stand)
+			const bool byMoisture = r.contains("moisture") && r["moisture"].is_array() && r["moisture"].size() == 2;
+			const float mFrom = byMoisture ? r["moisture"][0].get<float>() : 0, mTo = byMoisture ? r["moisture"][1].get<float>() : 1;
 			std::vector<uint32_t>& reuse = idsOf[rule];
 			const uint32_t rs = ScatterHash(m.seed, (uint32_t)ri, 0x5ca7, 1);
 			const float maxSlope = r.value("maxSlopeDeg", 32.0f), away = r.value("awayFromBases", 45.0f);
 			int n = 0;
+			double moistSum = 0;
 			auto place = [&](float x, float z, uint32_t h) {
 				bool high = false;
 				if (!objectsHigh.empty()) {
@@ -1083,15 +1146,24 @@ namespace {
 				uint32_t oid;
 				if (!reuse.empty()) { oid = reuse.front(); reuse.erase(reuse.begin()); }
 				else oid = next++;
+				const float yaw = ScatterUnit(ScatterHash(h, 3, 3, 3)) * 6.283f;
+				const float y = terrain.getHeight(x, z);
 				block.push_back("\t\tCONTAINER " + std::to_string(oid) + " \"" + bp + "\" \n");
-				block.push_back("\t\t\tPOSITION " + Num(x) + " " + Num(terrain.getHeight(x, z)) + " " + Num(z) + " \n");
-				block.push_back("\t\t\tORIENTATION 0.00 " + Num(ScatterUnit(ScatterHash(h, 3, 3, 3)) * 6.283f) + " 0.00 \n");
+				block.push_back("\t\t\tPOSITION " + Num(x) + " " + Num(y) + " " + Num(z) + " \n");
+				block.push_back("\t\t\tORIENTATION 0.00 " + Num(yaw) + " 0.00 \n");
 				if (!sub.empty())
 					block.push_back("\t\t\tSUBTYPE \"" + sub[(h >> 12) % sub.size()] + "\" \n");
 				block.push_back("\t\tEND_CONTAINER \n");
 				block.push_back("\n");
 				auth.objects[oid] = rule;
 				auth.positions[oid] = { x, z };
+				if (ps) {
+					if (const GameObjBlueprint* b = ps->gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, bp))
+						ps->add(oid, b, neutralObj, Vector3(x, y, z), Vector3(0, yaw, 0));
+					else if (unknownBp.insert(bp).second)
+						warnings.push_back(rule + ": the game set has no container \"" + bp + "\" (written as asked)");
+				}
+				if (byMoisture) moistSum += moistureAt(x, z);
 				take(x, z);
 				n++;
 			};
@@ -1099,10 +1171,11 @@ namespace {
 				for (auto& [bx, bz] : bases) if ((x - bx) * (x - bx) + (z - bz) * (z - bz) < away * away) return true;
 				return false;
 			};
-			if (r.contains("on")) {
-				// by ground: the groups of the materials (or the groups) named; a transition counts half
+			if (r.contains("on") || byMoisture || !densityMask.empty()) {
+				// by ground: the groups of the materials (or the groups) named, a transition counting
+				// half; without "on" any ground. The density times the moisture's ramp and the mask
 				std::set<std::string> groups;
-				for (const json& o : r["on"]) {
+				for (const json& o : r.value("on", json::array())) {
 					if (!o.is_string()) continue;
 					const std::string name = o.get<std::string>();
 					const json& mats = data["materials"];
@@ -1113,6 +1186,7 @@ namespace {
 					}
 					else groups.insert(name);
 				}
+				const bool anyGround = !r.contains("on");
 				const float density = r.value("density", 20.0f), spacing = std::max(2.0f, r.value("spacing", 6.0f)), clump = r.value("clump", 0.5f);
 				const int limit = r.value("max", 30000);
 				// a jittered grid of cells of `spacing`; a cell's chance is density x its area. First
@@ -1127,12 +1201,26 @@ namespace {
 						const float jx = x + (ScatterUnit(h) - 0.5f) * spacing * 0.8f, jz = z + (ScatterUnit(ScatterHash(h, 1, 2, 3)) - 0.5f) * spacing * 0.8f;
 						const TerrainTile* t = tileAt(jx, jz);
 						if (!t || !t->texture || !t->texture->grp) continue;
-						const std::string& gname = t->texture->grp->name;
-						float w = groups.count(gname) ? 1.0f : 0.0f;
-						if (w == 0 && gname.find('-') != std::string::npos)
-							for (const std::string& g : groups)
-								if (gname.find(g) != std::string::npos) { w = 0.5f; break; }
+						float w = 1.0f;
+						if (!anyGround) {
+							const std::string& gname = t->texture->grp->name;
+							w = groups.count(gname) ? 1.0f : 0.0f;
+							if (w == 0 && gname.find('-') != std::string::npos)
+								for (const std::string& g : groups)
+									if (gname.find(g) != std::string::npos) { w = 0.5f; break; }
+						}
 						if (w == 0) continue;
+						if (byMoisture) {
+							const float span = std::abs(mTo - mFrom) > 1e-4f ? mTo - mFrom : 1e-4f;
+							const float u = std::clamp((moistureAt(jx, jz) - mFrom) / span, 0.0f, 1.0f);
+							w *= u * u * (3 - 2 * u);
+							if (w <= 0) continue;
+						}
+						if (!densityMask.empty()) {
+							const int vx = std::clamp((int)std::lround(jx / 5) + E, 0, W), vz = std::clamp((int)std::lround(jz / 5) + E, 0, H);
+							w *= std::clamp(densityMask[(size_t)vz * (W + 1) + vx], 0.0f, 1.0f);
+							if (w <= 0) continue;
+						}
 						// clumps: a slow noise thins the trees into stands and glades
 						const float cl = 1.0f - clump + clump * 2.0f * ScatterNoise(jx / 60.0f, jz / 60.0f, rs);
 						if (ScatterUnit(ScatterHash(h, 9, 9, 9)) >= chance * w * std::max(0.0f, cl)) continue;
@@ -1146,6 +1234,16 @@ namespace {
 					if (!free(sp.x, sp.z, spacing * 0.45f)) continue;
 					place(sp.x, sp.z, sp.h);
 				}
+				if (byMoisture && n > 0) {
+					// the land's mean moisture, for the report: the forest's against it
+					double land = 0;
+					int cnt = 0;
+					for (float z = 10; z < ph; z += 20)
+						for (float x = 10; x < pw; x += 20)
+							if (const TerrainTile* t = tileAt(x, z); t && !t->fullOfWater) { land += moistureAt(x, z); cnt++; }
+					moistureRep[id] = { { "underObjects", std::lround(moistSum / n * 1000) / 1000.0 }, { "land", cnt ? std::lround(land / cnt * 1000) / 1000.0 : 0.0 },
+						{ "ramp", { mFrom, mTo } } };
+				}
 			}
 			else {
 				// groups of objects: near each base, or over the map
@@ -1153,8 +1251,21 @@ namespace {
 				const float spread = r.value("spread", 9.0f);
 				json dist = r.value("distance", json::array({ 70, 160 }));
 				const float dmin = dist.is_array() && dist.size() > 1 ? dist[0].get<float>() : 70, dmax = dist.is_array() && dist.size() > 1 ? dist[1].get<float>() : 160;
-				std::vector<std::pair<float, float>> centres;
 				uint32_t h = rs;
+				// a group's places round (cx, cz), each free and on good ground (none placed yet)
+				auto groupSpots = [&](float cx, float cz, uint32_t hs) {
+					std::vector<std::pair<float, float>> out;
+					for (int k = 0; k < size * 8 && (int)out.size() < size; k++) {
+						hs = ScatterHash(hs, (uint32_t)k, 5, 5);
+						const float a = ScatterUnit(hs) * 6.283f, d = ScatterUnit(ScatterHash(hs, 2, 2, 2)) * spread;
+						const float x = cx + std::cos(a) * d, z = cz + std::sin(a) * d;
+						if (!ok(x, z, maxSlope) || !free(x, z, 3.5f)) continue;
+						bool clash = false;
+						for (auto& [ox, oz] : out) clash |= (ox - x) * (ox - x) + (oz - z) * (oz - z) < 3.5f * 3.5f;
+						if (!clash) out.push_back({ x, z });
+					}
+					return out;
+				};
 				auto groupAt = [&](float cx, float cz) {
 					int placed = 0;
 					for (int k = 0; k < size * 6 && placed < size; k++) {
@@ -1167,15 +1278,42 @@ namespace {
 					}
 					return placed;
 				};
-				if (r.value("near", "") == "bases")
-					for (size_t b = 0; b < bases.size(); b++)
-						for (int gI = 0, tries = 0; gI < perBase && tries < 200; tries++) {
-							h = ScatterHash(rs, (uint32_t)b, (uint32_t)tries, 21);
-							const float a = ScatterUnit(h) * 6.283f, d = dmin + ScatterUnit(ScatterHash(h, 4, 4, 4)) * (dmax - dmin);
-							const float cx = bases[b].first + std::cos(a) * d, cz = bases[b].second + std::sin(a) * d;
-							if (!ok(cx, cz, maxSlope) || !free(cx, cz, spread + 6)) continue;
-							if (groupAt(cx, cz) > 0) gI++;
+				if (r.value("near", "") == "bases") {
+					// fair (the default): every base gets its groups at the same distances (the k-th
+					// group at the k-th share of the distance band), each of `size` objects, nearer to
+					// its own base than to any other; only the side differs
+					const bool fair = r.value("fair", true);
+					json per = json::array();
+					for (size_t b = 0; b < bases.size(); b++) per.push_back(0);
+					for (int gI = 0; gI < perBase; gI++)
+						for (size_t b = 0; b < bases.size(); b++) {
+							const float dk = dmin + (gI + 0.5f) / std::max(perBase, 1) * (dmax - dmin);
+							const float a0 = ScatterUnit(ScatterHash(rs, (uint32_t)b, (uint32_t)gI, 21)) * 6.283f;
+							bool done = false;
+							for (int tries = 0; tries < 216 && !done; tries++) {
+								const int ring = tries / 72;
+								const float a = a0 + (tries % 72) * (6.283f / 72);
+								float d;
+								if (!fair) d = dmin + ScatterUnit(ScatterHash(rs, (uint32_t)b, (uint32_t)tries, 23)) * (dmax - dmin);
+								else d = ring == 0 ? dk : ring == 1 ? dk * ((tries & 1) ? 1.12f : 0.88f) : dmin + ScatterUnit(ScatterHash(rs, (uint32_t)b, (uint32_t)tries, 23)) * (dmax - dmin);
+								const float cx = bases[b].first + std::cos(a) * d, cz = bases[b].second + std::sin(a) * d;
+								if (!ok(cx, cz, maxSlope) || !free(cx, cz, spread + 6)) continue;
+								bool nearer = true;
+								for (size_t o = 0; o < bases.size(); o++)
+									if (o != b && std::hypot(cx - bases[o].first, cz - bases[o].second) < d + spread) nearer = false;
+								if (!nearer) continue;
+								const auto spots = groupSpots(cx, cz, ScatterHash(rs, (uint32_t)b, (uint32_t)(gI * 1000 + tries), 27));
+								if (spots.empty() || (fair && (int)spots.size() < size)) continue;
+								for (size_t k = 0; k < spots.size(); k++)
+									place(spots[k].first, spots[k].second, ScatterHash(rs, (uint32_t)(b * 64 + gI), (uint32_t)k, 29));
+								per[b] = per[b].get<int>() + (int)spots.size();
+								done = true;
+							}
+							if (!done)
+								warnings.push_back(rule + ": base " + std::to_string(b) + " has no room for group " + std::to_string(gI + 1) + " (" + Num(dk) + " m out)");
 						}
+					nearBases[id] = per;
+				}
 				for (int gI = 0, tries = 0; gI < count && tries < count * 60; tries++) {
 					h = ScatterHash(rs, (uint32_t)tries, 31, 31);
 					const float cx = 30 + ScatterUnit(h) * (pw - 60), cz = 30 + ScatterUnit(ScatterHash(h, 6, 6, 6)) * (ph - 60);
@@ -1188,11 +1326,231 @@ namespace {
 		}
 		lines.insert(lines.begin() + end, block.begin(), block.end());
 		report["scatter"] = counts;
+		if (!nearBases.empty()) report["scatterNearBases"] = nearBases;
+		if (!moistureRep.empty()) report["scatterMoisture"] = moistureRep;
+		return made;
+	}
+
+	// The bases by intent (MapObjects.h): the starts (map.json's, the rest chosen), per player its
+	// civic centre on the nearest site the server's rules accept near the start (facing the map's
+	// middle), the base's buildings round it (each on a site the rules accept, civic ones in its
+	// city), the peasants before its door, the start camera on it
+	int PlaceBases(const MapJson& m, Terrain& terrain, std::vector<std::string>& lines, Authoring& auth,
+		std::map<std::string, std::vector<uint32_t>>& idsOf, uint32_t& next, std::vector<std::string>& warnings, json& report,
+		MapObjects::PlacementState& ps, std::vector<std::pair<float, float>>& basesAt)
+	{
+		const json bj = m.raw.value("bases", json::object());
+		const GameSet& gs = *ps.gameSet;
+		const auto [aw, ad] = terrain.getPlayableArea();
+		const auto [ptw, pth] = terrain.getNumPlayableTiles();
+		json rep = json::object(), list = json::array();
+		const size_t np = m.players.size();
+		std::vector<float> sx(np), sz(np);
+		std::vector<bool> has(np, false);
+		std::vector<std::pair<float, float>> fixed;
+		std::vector<size_t> want;
+		for (size_t i = 0; i < np; i++) {
+			const MapPlayer& p = m.players[i];
+			if (p.hasStart) {
+				sx[i] = p.x, sz[i] = p.z, has[i] = true;
+				fixed.push_back({ p.x, p.z });
+			}
+			else if (p.autoStart || bj.value("auto", false))
+				want.push_back(i);
+		}
+		auto playerObj = [&](size_t i) -> CommonGameObject* {
+			if (i >= auth.players.size()) return nullptr;
+			auto it = ps.players.find(auth.players[i]);
+			return it == ps.players.end() ? nullptr : it->second;
+		};
+		if (!want.empty()) {
+			const GameObjBlueprint* c = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, m.players[want[0]].base);
+			json sr;
+			const auto chosen = MapObjects::ChooseStarts(ps, playerObj(want[0]), c, fixed, (int)want.size(), bj, sr, warnings);
+			json cj = json::array();
+			for (size_t k = 0; k < chosen.size(); k++) {
+				const size_t i = want[k];
+				sx[i] = chosen[k].first, sz[i] = chosen[k].second, has[i] = true;
+				cj.push_back({ { "player", i }, { "start", { chosen[k].first, chosen[k].second } } });
+			}
+			sr["chosen"] = cj;
+			rep["autoStarts"] = sr;
+		}
+		const float searchM = bj.value("searchM", 40.0f);
+		int made = 0;
+		for (size_t i = 0; i < np && i < auth.players.size(); i++) {
+			const MapPlayer& p = m.players[i];
+			const std::string rule = "base:" + std::to_string(i);
+			if (!has[i] || p.base.empty() || auth.suppressed.count(rule))
+				continue;
+			CommonGameObject* player = playerObj(i);
+			const size_t end = PlayerEnd(lines, auth.players[i]);
+			if (!player || end == std::string::npos) {
+				warnings.push_back(rule + ": player " + std::to_string(auth.players[i]) + " isn't in the level");
+				continue;
+			}
+			const float px = sx[i], pz = sz[i];
+			if (px < 0 || pz < 0 || px > aw || pz > ad) {
+				warnings.push_back(rule + ": the start (" + Num(px) + ", " + Num(pz) + ") is off the map");
+				continue;
+			}
+			if (const TerrainTile* t = terrain.getTile((int)(px / 5) + terrain.edge, (int)(pz / 5) + terrain.edge); t && t->fullOfWater)
+				warnings.push_back(rule + ": the start (" + Num(px) + ", " + Num(pz) + ") is under water");
+			const GameObjBlueprint* cbp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, p.base);
+			if (!cbp) {
+				warnings.push_back(rule + ": the game set has no building \"" + p.base + "\"");
+				continue;
+			}
+			std::vector<uint32_t>& reuse = idsOf[rule];
+			const std::function<uint32_t()> takeId = [&]() {
+				if (!reuse.empty()) {
+					const uint32_t id = reuse.front();
+					reuse.erase(reuse.begin());
+					return id;
+				}
+				return next++;
+			};
+			std::vector<CommonGameObject*> madeObjs;
+			MapObjects::SiteQuery q;
+			q.x = px, q.z = pz, q.rMax = searchM, q.faceX = aw / 2, q.faceZ = ad / 2;
+			MapObjects::Site site = MapObjects::FindSite(ps, player, cbp, q);
+			json pj = { { "player", i }, { "start", { px, pz } } };
+			if (!site.found) {
+				warnings.push_back(rule + ": no site for the " + p.base + " within " + Num(searchM) + " m of the start (" + Num(px) + ", " + Num(pz)
+					+ ") passes the server's rules (" + MapObjects::StatusName(site.firstRefusal) + "); put at the start, the placement check reports it");
+				site.ori = Vector3(0, 3.1415927f, 0);
+				site.pos = Vector3(px, terrain.getHeight(px, pz), pz);
+				site.plan = StampdownPlan::getStampdownPlan(&ps, player, cbp, site.pos, site.ori);
+			}
+			CommonGameObject* centre = MapObjects::PutBuilding(ps, player, cbp, site, takeId, madeObjs);
+			const float cx = centre->position.x, cz = centre->position.z;
+			pj["centre"] = { { "blueprint", p.base }, { "at", { cx, cz } }, { "movedM", std::lround(std::hypot(cx - px, cz - pz) * 10) / 10.0 },
+				{ "quarter", (int)std::lround(centre->orientation.y / 1.5707964f) % 4 }, { "passed", site.found } };
+			// the door's side (the model's +z turned: (-sin y, cos y)) and the half size
+			const float dx = -std::sin(centre->orientation.y), dz = std::cos(centre->orientation.y);
+			float half = 7.5f;
+			if (cbp->footprint && !cbp->footprint->tiles.empty()) {
+				int x0 = 1 << 20, x1 = -(1 << 20), z0 = 1 << 20, z1 = -(1 << 20);
+				for (const auto& to : cbp->footprint->tiles)
+					x0 = std::min(x0, to.offsetX), x1 = std::max(x1, to.offsetX), z0 = std::min(z0, to.offsetZ), z1 = std::max(z1, to.offsetZ);
+				half = std::max(x1 - x0 + 1, z1 - z0 + 1) * 2.5f;
+			}
+			// the peasants' place before the door: kept free of the base's buildings
+			std::vector<uint8_t> keep((size_t)ptw * pth, 0);
+			for (float along = half; along <= half + 18; along += 2.5f)
+				for (float across = -9; across <= 9; across += 2.5f) {
+					const float x = cx + dx * along + dz * across, z = cz + dz * along - dx * across;
+					const int tx = (int)(x / 5), tz = (int)(z / 5);
+					if (x >= 0 && z >= 0 && tx < ptw && tz < pth) keep[(size_t)tz * ptw + tx] = 1;
+				}
+			// the base's buildings
+			const json intents = p.buildings.is_array() ? p.buildings : bj.value("buildings", json::array());
+			json placedJ = json::array();
+			int asked = 0, placedN = 0;
+			for (const json& in : intents) {
+				std::string name;
+				int count = 1;
+				float d0 = 12, d1 = 45, angle = 1e30f;
+				if (in.is_string()) name = in.get<std::string>();
+				else if (in.is_object()) {
+					name = in.value("blueprint", "");
+					count = in.value("count", 1);
+					if (in.contains("distance") && in["distance"].is_array() && in["distance"].size() == 2)
+						d0 = in["distance"][0].get<float>(), d1 = in["distance"][1].get<float>();
+					if (in.contains("toward")) {
+						const json& tw = in["toward"];
+						if (tw.is_number()) angle = tw.get<float>() * 3.14159265f / 180.0f;
+						else if (tw.is_string() && (tw.get<std::string>() == "centre" || tw.get<std::string>() == "away")) {
+							angle = std::atan2(ad / 2 - cz, aw / 2 - cx);
+							if (tw.get<std::string>() == "away") angle += 3.14159265f;
+						}
+					}
+				}
+				const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
+				if (!bp) {
+					warnings.push_back(rule + ": the game set has no building \"" + name + "\"");
+					continue;
+				}
+				for (int c = 0; c < count; c++) {
+					asked++;
+					MapObjects::SiteQuery q2;
+					q2.x = cx, q2.z = cz, q2.rMin = d0, q2.rMax = d1, q2.prefDist = d0, q2.prefAngle = angle;
+					q2.faceX = cx, q2.faceZ = cz, q2.keepFree = &keep;
+					const MapObjects::Site s2 = MapObjects::FindSite(ps, player, bp, q2);
+					if (!s2.found) {
+						warnings.push_back(rule + ": no site for " + name + " " + Num(d0) + "-" + Num(d1) + " m from the " + p.base
+							+ " passes the server's rules (the first refusal: " + MapObjects::StatusName(s2.firstRefusal) + ", " + std::to_string(s2.tried) + " tried)");
+						continue;
+					}
+					const CommonGameObject* b = MapObjects::PutBuilding(ps, player, bp, s2, takeId, madeObjs);
+					placedJ.push_back({ { "blueprint", name }, { "id", b->id }, { "at", { b->position.x, b->position.z } },
+						{ "fromCentreM", std::lround(std::hypot(b->position.x - cx, b->position.z - cz)) } });
+					placedN++;
+				}
+			}
+			// the peasants, in rows before the door, each on the nearest free walkable spot
+			int peasantsPlaced = 0;
+			if (const GameObjBlueprint* peasant = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant")) {
+				std::vector<std::pair<float, float>> stood;
+				auto freeSpot = [&](float x, float z) {
+					const int tx = (int)(x / 5), tz = (int)(z / 5);
+					if (x < 2 || z < 2 || tx >= ptw || tz >= pth) return false;
+					if (ps.tiles[(size_t)tz * ptw + tx].building.getFrom(&ps)) return false;
+					const TerrainTile* t = terrain.getTile(tx + terrain.edge, tz + terrain.edge);
+					if (!t || t->fullOfWater) return false;
+					const float a = terrain.getVertex(tx + terrain.edge, tz + terrain.edge), b = terrain.getVertex(tx + terrain.edge + 1, tz + terrain.edge),
+						c = terrain.getVertex(tx + terrain.edge, tz + terrain.edge + 1), d = terrain.getVertex(tx + terrain.edge + 1, tz + terrain.edge + 1);
+					if (std::max({ a, b, c, d }) - std::min({ a, b, c, d }) > 4.0f) return false;
+					for (auto& [ox, oz] : stood)
+						if ((ox - x) * (ox - x) + (oz - z) * (oz - z) < 2.0f * 2.0f) return false;
+					return true;
+				};
+				for (int k = 0; k < p.peasants; k++) {
+					const float along = half + 6.0f + 4.0f * (k / 4), across = -6.0f + 4.0f * (k % 4);
+					const float tx = cx + dx * along + dz * across, tz = cz + dz * along - dx * across;
+					bool done = false;
+					for (int r = 0; r <= 24 && !done; r++)
+						for (int a = 0; a < std::max(1, r * 6) && !done; a++) {
+							const float an = a * 6.2831853f / std::max(1, r * 6);
+							const float x = tx + std::cos(an) * r, z = tz + std::sin(an) * r;
+							if (!freeSpot(x, z)) continue;
+							madeObjs.push_back(ps.add(takeId(), peasant, player, Vector3(x, terrain.getHeight(x, z), z), centre->orientation));
+							stood.push_back({ x, z });
+							peasantsPlaced++;
+							done = true;
+						}
+					if (!done)
+						warnings.push_back(rule + ": no free ground for peasant " + std::to_string(k + 1) + " before the " + p.base);
+				}
+			}
+			else if (p.peasants > 0)
+				warnings.push_back(rule + ": the game set has no character \"Peasant\"");
+			// the world's lines: what stands under the player (a city with what is in it)
+			std::vector<std::string> block;
+			for (CommonGameObject* o : madeObjs)
+				if (o->parent == player)
+					MapObjects::ObjectText(o, 2, block);
+			for (CommonGameObject* o : madeObjs) {
+				auth.objects[o->id] = rule;
+				auth.positions[o->id] = { o->position.x, o->position.z };
+				made++;
+			}
+			lines.insert(lines.begin() + end, block.begin(), block.end());
+			SetStartCamera(lines, auth.players[i], Vector3(cx, terrain.getHeight(cx, cz) + 45.0f, cz + 70.0f), -0.67f, 3.15f);
+			basesAt.push_back({ cx, cz });
+			pj["buildings"] = placedJ;
+			pj["asked"] = asked;
+			pj["placed"] = placedN;
+			pj["peasants"] = peasantsPlaced;
+			list.push_back(pj);
+		}
+		rep["players"] = list;
+		report["bases"] = rep;
 		return made;
 	}
 
 	// the MAP line naming the folder
-	bool BuildLevel(const fs::path& folder, const MapJson& m, const Terrain& terrain, std::string& out, std::vector<std::string>& warnings,
+	bool BuildLevel(const fs::path& folder, const MapJson& m, Terrain& terrain, std::string& out, std::vector<std::string>& warnings,
 		json& report, std::string& error)
 	{
 		std::string world;
@@ -1249,6 +1607,21 @@ namespace {
 		auth.positions.clear();
 		uint32_t next = NextUniqueId(lines);
 		int made = 0;
+		// The objects go through the server's own placement rules on a light game state
+		// (MapObjects.h): the game set, this terrain, the level's objects as they are
+		std::unique_ptr<MapObjects::PlacementState> ps;
+		if (!m.players.empty() || m.raw.contains("scatter")) {
+			if (auto gs = MapObjects::LoadGameSet(m.gameSet))
+				ps = std::make_unique<MapObjects::PlacementState>(gs, &terrain), ps->readWorld(lines);
+			else
+				warnings.push_back("objects: the game set \"" + m.gameSet + "\" can't be loaded: bases placed without the server's rules, no placement checks");
+		}
+		std::vector<std::pair<float, float>> basesAt;
+		if (ps) {
+			made += PlaceBases(m, terrain, lines, auth, idsOf, next, warnings, report, *ps, basesAt);
+			changed = true;
+		}
+		else
 		// a base per player (map.json "players": [{ "start": [x, z], "base": "Manor", "peasants": 4 }]):
 		// its Manor at the start, peasants in front of it, the start camera looking at it
 		for (size_t i = 0; i < m.players.size() && i < auth.players.size(); i++) {
@@ -1297,7 +1670,13 @@ namespace {
 			SetStartCamera(lines, auth.players[i], Vector3(p.x, terrain.getHeight(p.x, p.z) + 45.0f, p.z + 70.0f), -0.67f, 3.15f);
 			changed = true;
 		}
-		made += Scatter(folder, m, terrain, lines, auth, idsOf, next, warnings, report);
+		made += Scatter(folder, m, terrain, lines, auth, idsOf, next, warnings, report, ps.get(), basesAt);
+		// the placement checks (every building by the server's rules, as it stands) and the bases'
+		// fairness
+		if (ps) {
+			report["placement"] = MapObjects::CheckPlacement(ps.get(), &warnings);
+			report["fairness"] = MapObjects::Fairness(ps.get(), m.raw.value("bases", json::object()).value("fairnessRadiusM", 200.0f), &warnings);
+		}
 		changed = true;
 		if (changed)
 			RebuildPredec(lines);
