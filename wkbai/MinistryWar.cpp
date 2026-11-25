@@ -1132,6 +1132,18 @@ namespace {
 			const GameSet* gs = g.server.gameSet.get();
 			const int rushing = gs->items.names.getIndex("I Am Rushing");
 			const int warMode = gs->items.names.getIndex("War Mode");
+			// The scheduler's War Mode (Attack Scheduler\Main Scheduler.cpp, "I Should Shift Into War
+			// Mode") holds the peasants too: "War Peasants Needed" is set to the count at the switch, and
+			// the economic commission wants that many ("Total Peasants Needed", Kingmaker Economics.cpp:
+			// else 0.4 x the population limit) until the army spawns or it shifts back. With every enemy
+			// across the sea the ministry's War sends the attacks and that army never marches: on 3 Isles
+			// Belisar's ministry at position 0 sat at 40 peasants for the last 24 minutes with 400-500
+			// food unspent (WKB_MINOFF 1048576 off). War Mode itself stays (its army, its farms).
+			if (warMode >= 0 && me->getItem(warMode) > 0.0f && !(MinOff() & 1048576))
+				if (const int held = gs->items.names.getIndex("War Peasants Needed"); held >= 0 && me->getItem(held) > 0.0f) {
+					g.log(ADMIRALTY, "War Mode held the peasants at %.0f (every enemy is across the sea): released", me->getItem(held));
+					me->setItem(held, 0.0f);
+				}
 			if (rushing < 0 || warMode < 0 || me->getItem(rushing) <= 0.0f || me->getItem(warMode) <= 0.0f)
 				return;
 			for (const char* name : { "War Mode", "War Peasants Needed", "War Farms Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "War Override" })
