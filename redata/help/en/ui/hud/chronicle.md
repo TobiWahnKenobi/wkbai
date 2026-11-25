@@ -1,6 +1,6 @@
 ---
 title: Statistics and timeline
-ids: [ui/hud/statistics, ui/hud/statistics/graph#the-graph, ui/hud/timeline#timeline, ui/hud/timeline/chronicle#chronicle-view, ui/hud/timeline/statistics#statistics-view, ui/hud/announcements#announcements]
+ids: [ui/hud/statistics, ui/hud/statistics/graph#the-graph, ui/hud/timeline#timeline, ui/hud/timeline/chronicle#chronicle-view, ui/hud/timeline/statistics#statistics-view, ui/hud/timeline/export#export, ui/hud/announcements#announcements]
 order: 90
 ---
 
@@ -50,6 +50,15 @@ The plain numbers, newest first: the time, the event, and for each side how many
 
 - **An entry's title:** the camera looks at the place.
 - **A unit's name** (a link): your own unit, still alive, is selected and looked at; another's is looked at when you can see it; else the camera goes to where it happened.
+
+### Export
+
+**Export...** at the right of the view switch saves the timeline as a file, to keep or to share:
+
+- **Markdown (.md):** plain text with light marks (names in bold, units in italics), for forums, wikis and notes;
+- **Web page (.html):** opens in any browser, with the players in their colours on a dark page.
+
+The file holds what the window shows (the events you saw, or all of them in a replay and after the game), and both views in one: each event's date, title and paragraph, then its numbers. It goes to the **chronicles** folder in [wkbai's own folder](../../files.md#your-own-folder) (`%APPDATA%\wkbai\chronicles`), named after the date and time ("Chronicle 2026-11-24 21-05-12.html"). The line under the switch then names it: **Open** shows the file, **Folder** the folder, **x** hides the line.
 
 ## Announcements
 

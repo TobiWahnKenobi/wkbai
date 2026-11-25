@@ -2,14 +2,14 @@
 
     python -I tools/ui/top_bar_buttons.py [--preview PANEL.tga OUT.png]
 
-Writes redata/Interface/InGame/Top Panel/{Statistics,Timeline} Button{, Highlighted, Pressed}.tga
-(56 x 14, like the original's buttons) and "Knot Slot.tga", the stone slot both sit in on the
-Celtic band left of the Settings button. Everything is drawn here from scratch: a noisy navy
+Writes redata/Interface/InGame/Top Panel/{Statistics,Timeline} Button{, Highlighted}.tga
+(56 x 14, like the original's buttons). Their rail on the Celtic band left of Settings is the
+original panel's own strip, drawn again by ClientUIScript.lua. Everything here is drawn from scratch: a noisy navy
 tile lit from the top right, a gold icon with a dark outline (a bar chart, an hourglass), and
-for the pressed state (the window is open) a darker sunken tile with the icon a pixel lower
-and a thin gold rim. No pixel of the original's art is used.
+the lit tile for the mouse over it and for its window being open (the original's buttons have no
+pressed look). No pixel of the original's art is used.
 
---preview draws the slot and the buttons onto a copy of the original's Standard Panel.tga (read
+--preview draws that rail and the buttons onto a copy of the original's Standard Panel.tga (read
 from the game, never written) to check the look; the result is for the developer's eyes only.
 
 Needs Pillow.
@@ -22,11 +22,11 @@ OUT = os.path.join(ROOT, "redata", "Interface", "InGame", "Top Panel")
 W, H = 56, 14
 SS = 8  # supersampling for the icons
 
-# the slot: where the buttons sit, measured on the panel (x of the left button, its y)
+# where the left button sits on the panel (the Statistics button; Timeline is 60 further)
 SLOT_X, SLOT_Y = 98, 20
 
 
-def tile(seed, bright, sunken=False):
+def tile(seed, bright):
     """The navy background: dark at the bottom left, lighter to the top right, with grain."""
     rnd = random.Random(seed)
     im = Image.new("RGBA", (W, H))
@@ -34,28 +34,18 @@ def tile(seed, bright, sunken=False):
     for y in range(H):
         for x in range(W):
             t = 0.55 * (x / (W - 1)) + 0.45 * (1 - y / (H - 1))  # 0 bottom left .. 1 top right
-            if sunken:
-                t = 0.55 * t
             base = 0.12 + 0.55 * t * t + 0.12 * bright
             n = rnd.uniform(-0.07, 0.07)
             v = max(0.0, min(1.0, base + n))
             r = g = int(10 + 95 * v * v + 35 * bright * v)
             b = int(40 + 140 * v + 30 * bright)
             px[x, y] = (min(r, 255), min(g, 255), min(b, 255), 255)
-    d = ImageDraw.Draw(im)
-    if sunken:
-        # shade along the top and left edge, as a pressed-in plate
-        d.line([(0, 0), (W - 1, 0)], fill=(2, 2, 18, 255))
-        d.line([(0, 0), (0, H - 1)], fill=(2, 2, 18, 255))
-        d.line([(1, 1), (W - 2, 1)], fill=(6, 6, 40, 255))
-        d.line([(1, 1), (1, H - 2)], fill=(6, 6, 40, 255))
-    else:
-        # lit edge at the right, dark at the left, as the original's
-        for y in range(H):
-            r, g, b, a = px[W - 1, y]
-            px[W - 1, y] = (min(r + 40, 255), min(g + 40, 255), min(b + 45, 255), 255)
-            r, g, b, a = px[0, y]
-            px[0, y] = (r // 2, g // 2, b // 2, 255)
+    # lit edge at the right, dark at the left, as the original's
+    for y in range(H):
+        r, g, b, a = px[W - 1, y]
+        px[W - 1, y] = (min(r + 40, 255), min(g + 40, 255), min(b + 45, 255), 255)
+        r, g, b, a = px[0, y]
+        px[0, y] = (r // 2, g // 2, b // 2, 255)
     return im
 
 
@@ -149,42 +139,12 @@ def compose(bg, big, dx=0, dy=0, dim=1.0):
     return out
 
 
-def rim(im):
-    """The pressed state's thin gold rim inside the edge."""
-    d = ImageDraw.Draw(im)
-    d.rectangle([1, 1, W - 2, H - 2], outline=(200, 160, 60, 255))
-    return im
-
-
-def slot():
-    """A stone slot 2 px around both buttons (3 px apart), like the five's grey slots."""
-    sw, sh = 2 + W + 3 + W + 2, H + 4
-    rnd = random.Random(7)
-    im = Image.new("RGBA", (sw, sh))
-    px = im.load()
-    for y in range(sh):
-        for x in range(sw):
-            v = 150 + rnd.randint(-14, 14)
-            px[x, y] = (v, v - 6, v - 22, 255)
-    d = ImageDraw.Draw(im)
-    d.rectangle([0, 0, sw - 1, sh - 1], outline=(30, 26, 20, 255))
-    d.line([(1, 1), (sw - 2, 1)], fill=(215, 210, 195, 255))
-    d.line([(1, 1), (1, sh - 2)], fill=(215, 210, 195, 255))
-    d.line([(1, sh - 2), (sw - 2, sh - 2)], fill=(80, 74, 62, 255))
-    d.line([(sw - 2, 1), (sw - 2, sh - 2)], fill=(80, 74, 62, 255))
-    # the seam between the two buttons
-    d.line([(2 + W + 1, 2), (2 + W + 1, sh - 3)], fill=(80, 74, 62, 255))
-    return im
-
-
 def build():
     os.makedirs(OUT, exist_ok=True)
     files = {}
     for name, icon, seed in (("Statistics", icon_stats(), 3), ("Timeline", icon_timeline(), 5)):
         files[name + " Button"] = compose(tile(seed, 0.0), icon)
         files[name + " Button Highlighted"] = compose(tile(seed, 1.0), icon)
-        files[name + " Button Pressed"] = rim(compose(tile(seed, 0.0, sunken=True), icon, 1, 1, dim=0.9))
-    files["Knot Slot"] = slot()
     for n, im in files.items():
         im.save(os.path.join(OUT, n + ".tga"), compression=None)
     return files
@@ -192,9 +152,9 @@ def build():
 
 def preview(panel_path, out_path, files):
     p = Image.open(panel_path).convert("RGBA")
-    p.alpha_composite(files["Knot Slot"], (SLOT_X - 2, SLOT_Y - 2))
+    p.alpha_composite(p.crop((196, 16, 338, 42)), (196 - 120, 16))  # as ClientUIScript.lua
     p.alpha_composite(files["Statistics Button"], (SLOT_X, SLOT_Y))
-    p.alpha_composite(files["Timeline Button Pressed"], (SLOT_X + W + 3, SLOT_Y))
+    p.alpha_composite(files["Timeline Button Highlighted"], (SLOT_X + 60, SLOT_Y))
     p = p.crop((0, 0, 560, 60))
     p.resize((p.width * 4, p.height * 4), Image.NEAREST).save(out_path)
 

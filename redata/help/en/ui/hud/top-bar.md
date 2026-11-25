@@ -12,12 +12,12 @@ The bar across the top has two halves. The **buttons** sit at its left end, the 
 
 ## Statistics and Timeline
 
-Two buttons of wkbai's own sit on the knotwork left of the five, in a stone slot of their own:
+Two buttons of wkbai's own sit left of the five, where the knotwork was: the rail of the five starts further left and holds them too.
 
 - **Statistics** (a bar chart) opens the [statistics window](chronicle.md#statistics), as **F6** does;
 - **Timeline** (an hourglass) opens the [timeline](chronicle.md#timeline), as **F7** does.
 
-A button lights up under the mouse, and stays **pressed in**, with a gold rim, while its window is open. Click it again (or press the key) to close the window. The tooltip names the key, as set in the [key bindings](help:controls/keys/rebind).
+A button lights up under the mouse, and stays **lit** while its window is open. Click it again (or press the key) to close the window. The tooltip names the key, as set in the [key bindings](help:controls/keys/rebind).
 
 > wkbai: the original had no statistics or timeline during a game; the space held only knotwork.
 
