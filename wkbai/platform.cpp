@@ -105,7 +105,13 @@ extern "C" __declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned
 extern "C" __declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int);
 namespace {
 	std::atomic<bool> g_samplerRun{ false };
-	std::thread g_samplerThread;
+	// (a sampler still running at exit stops: a joinable std::thread destroyed would terminate)
+	struct SamplerThread {
+		std::thread t;
+		~SamplerThread() { g_samplerRun = false; if (t.joinable()) t.join(); }
+		SamplerThread& operator=(std::thread&& o) { t = std::move(o); return *this; }
+		void join() { t.join(); }
+	} g_samplerThread;
 	std::vector<SamplerSample> g_samples;
 	DWORD g_samplerThreadId = 0;
 	// the samples' frames (by the unwind tables; 128 deep: a script's tree nests deep)

@@ -4169,13 +4169,7 @@ void Test_AIvsAI()
 		scriptFrom = startTime + cfg["scriptSample"][0].get<float>();
 		scriptTo = startTime + cfg["scriptSample"][1].get<float>();
 	}
-	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
-		if (scriptFrom >= 0.0f && !scriptSampling && server.timeManager.currentTime >= scriptFrom) {
-			scriptSampling = true;
-			scriptFrom = -1.0f;
-			SamplerStart(true);
-		}
-		if (scriptSampling && server.timeManager.currentTime >= scriptTo) {
+	auto scriptReport = [&]() {
 			scriptSampling = false;
 			SamplerHalt();
 			std::string text;
@@ -4191,7 +4185,15 @@ void Test_AIvsAI()
 				fclose(f);
 			}
 			fflush(stdout);
+	};
+	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
+		if (scriptFrom >= 0.0f && !scriptSampling && server.timeManager.currentTime >= scriptFrom) {
+			scriptSampling = true;
+			scriptFrom = -1.0f;
+			SamplerStart(true);
 		}
+		if (scriptSampling && server.timeManager.currentTime >= scriptTo)
+			scriptReport();
 		const double stepStart = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency());
 		if (saveAt >= 0.0f && server.timeManager.currentTime >= saveAt) {
 			saveAt = -1.0f;
@@ -4315,6 +4317,9 @@ void Test_AIvsAI()
 					list += " " + obj->blueprint->name + "/" + std::to_string(obj->getPlayer()->id);
 		printf("AITEST alias Deliverable Buildings:%s\n", list.c_str());
 	}
+	// (the game ended inside the sampled window)
+	if (scriptSampling)
+		scriptReport();
 	const std::vector<std::string> standing = census("end");
 	server.stopRecording();
 	// "save": "<path>.sav": the game at its end, e.g. a late game for the client's benchmark
