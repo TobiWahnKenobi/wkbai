@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/generated-transitions#generated-transitions, mechanic/far-land#stored-far-land, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/generated-transitions#generated-transitions, mechanic/far-land#stored-far-land, mechanic/far-land-hints#hints-for-the-far-land, mechanic/water-checks#the-water-checks, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -53,7 +53,7 @@ Instead of painting every hill by hand, a map maker (or an AI assistant) can des
 
 `wkbai --author terrain "<folder>"` turns the plan into `heights.png`: the shapes, then the roughness and the wearing, then the passes, ramps and river beds carved last, so that they stay passable. The same plan and seed always give the same land. Where the sea is, the folder's water gets a lake. It answers with numbers about the land: its heights, how steep it is, how much of it units can walk on (most units can stand on slopes up to 45 degrees), and for each shape whether it came out as asked: a plateau flat enough to build on, a pass or ramp not too steep, a river that never runs uphill. `wkbai --author terrain-stats "<folder>"` gives the same numbers for the land as it is now.
 
-**Rivers with water:** a river in the plan with `"water": true` gets its water too: one sloped surface that runs down its course, with rapids, cascades and falls where the land drops ([waterfalls](../../options/graphics/water.md#waterfalls)). `grade` smooths its bed into an even fall over that many metres; `"trough": false` leaves out the broad valley it carves first, for rivers in real land that has its own valleys. The water never stands above its banks, and lakes on the land keep their rims. Where the land beside it is flat and lower than the water, it gets a low natural bank (at most half a metre over the water), so the water ends along the river's own curve instead of in steps of the tile grid. Where the bank would have to rise more than 0.75 m, the land is left as it is; the build's report (`terrain.generated.riverBanks`) counts those places and names every 50th (`leftLowAt`).
+**Rivers with water:** a river in the plan with `"water": true` (and, if you like, a `"speed"` in metres a second) gets its water too: one sloped surface that runs down its course, with rapids, cascades and falls where the land drops ([waterfalls](../../options/graphics/water.md#waterfalls)). `grade` smooths its bed into an even fall over that many metres; `"trough": false` leaves out the broad valley it carves first, for rivers in real land that has its own valleys. The water never stands above its banks, and lakes on the land keep their rims. Where the land beside it is flat and lower than the water, it gets a low natural bank (at most half a metre over the water), so the water ends along the river's own curve instead of in steps of the tile grid. Where the bank would have to rise more than 0.75 m, the land is left as it is; the build's report (`terrain.generated.riverBanks`) counts those places and names every 50th (`leftLowAt`).
 
 **Your hand edits stay.** The plan only ever writes `heights.png`. What you changed with the [height brushes](terrain.md) is in `heights.hand.png`, which is never touched, and is added on top as before.
 
@@ -77,6 +77,27 @@ With both, the tiles where no picture fits are rare: on large maps of real, hill
 ## Stored far land
 
 A map folder can bring the land around it: `farland.png` (16-bit heights, north at the top) and `farland.json` (where its south-west corner lies, its cell size, its lowest and highest heights and its sea level). With [Extend map](../../options/graphics/terrain-grass.md#extend-map) on, that land is drawn around the map in place of made-up hills and coasts, blending in from the map's edge.
+
+## Hints for the far land
+
+Without stored far land, a map can still say what lies beyond its edges: `water.json`'s `farland` is a list of hints that Extend map follows. Each has a `kind`, a direction (`toward`: a compass name such as `"east"` or degrees; north is the top of the map) and how wide an angle it covers, seen from the map's middle (`spread`, 90 degrees by default):
+
+- **`sea`:** sea beyond that side, with its own coast; `level` sets its height where the map has no sea of its own.
+- **`land`:** dry land, no sea.
+- **`mountains`:** high ranges.
+- **`lowland`:** gentle land, without the wild hills.
+- **`river`:** the river that leaves the map nearest `at` (or every one on that side) bends toward that direction as it runs on.
+
+`from` sets how far beyond the edge (in tiles, at least 8) the hint is at full strength, and `weight` how strong it is. A map without hints shows the far land as before.
+
+## The water checks
+
+When a map folder is built, its water is checked, and the build's report (`water`) and `wkbai --author describe` list what was found, with places in metres:
+
+- **Lakes:** how big and deep each one is, and whether it is the sea or a lake. A lake that leaks off the map's edge, runs into the next valley far beyond where it is painted, floods over half the map or drowns a lower lake is a warning, as is a puddle: a large lake less than a metre deep everywhere.
+- **Rivers:** how much of each one's course has water, its longest dry stretch, any place where its water rises downstream (a dam across it), and its speed. Painted river tiles that stay dry are named.
+- **Falls and rapids:** every waterfall that will be drawn, with its width and drop, every placed fall that draws nothing, and the steep stretches drawn as white water.
+- **Rivers leaving the map,** and every far-land hint; a river hint with no river leaving the map there is a warning.
 
 The materials are data: `Maps\Materials\All_Textures.json` for the game's textures; a mod or texture set brings its own file of the same kind for its texture database.
 
@@ -103,7 +124,7 @@ Two commands help a map maker see what can go on a map and what is on one. They 
 
 ## Designing maps with an AI assistant
 
-The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), paint the ground by rules ([the ground from rules](#the-ground-from-rules)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
+The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), set the water (lakes, waterways and their speeds, seas, falls and [hints for the far land](#hints-for-the-far-land)) and read [the water checks](#the-water-checks), paint the ground by rules ([the ground from rules](#the-ground-from-rules)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
 
 ## In multiplayer
 

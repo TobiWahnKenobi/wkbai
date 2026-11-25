@@ -58,9 +58,11 @@ A waterway only steers water that is there. To make the river itself, dig its be
 
 ## Waterway speeds
 
-With the [river currents](../../mechanics/water-and-currents.md) on, a river's flow pushes and hurts the units in it. Without a speed of its own, a waterway's water flows as fast as wkbai finds it from the land. A map maker can give a waterway a speed in metres a second: below 0.5 m/s it counts as slow, below 1.2 m/s as normal, above that as fast. Rain and floods speed it up, as they do any river.
+With the [river currents](../../mechanics/water-and-currents.md) on, a river's flow pushes and hurts the units in it. Without a speed of its own, a waterway's water flows as fast as wkbai finds it from the land. A map maker can give a waterway a speed in metres a second: below 0.5 m/s it counts as slow, below 1.2 m/s as normal, above that as fast. A waterway can also have a speed for each of its points (`speeds`), for a lazy river in the plain that runs fast through a gorge; a 0 there takes the waterway's own speed. Rain and floods speed it up, as they do any river.
 
-The editor has no field for it yet. Set it in the map folder's `water.json` ([wkbai's map format](map-format.md#whats-in-a-map-folder)): `"speed": 1.5` beside the waterway's `"points"` and `"width"`. The editor's **Save map** keeps it.
+The speed shows too: the water's ripples and foam move as fast as the river flows, and from 2 m/s on it is drawn tight and broken, as rapids. A waterway without a speed looks as before.
+
+The editor has no field for it yet. Set it in the map folder's `water.json` ([wkbai's map format](map-format.md#whats-in-a-map-folder)): `"speed": 1.5` beside the waterway's `"points"` and `"width"`, or `"speeds": [0.5, 0.5, 3.5, 1.8]`, one for each point. The editor's **Save map** keeps it.
 
 ## Waterfalls
 

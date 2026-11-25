@@ -40,7 +40,7 @@ With Parallax occlusion mapping (terrain) on: how deep the ground's relief is, 0
 
 ## Extend map
 
-The land goes on beyond the map's edge, with hills, coasts and seas made to match the map, so the world doesn't end at the border. It is only drawn: units can't go there, and the game itself is unchanged. A map that brings its own far land (a map of a real place, for example) shows that instead ([stored far land](../../ui/editor/map-format.md#stored-far-land)).
+The land goes on beyond the map's edge, with hills, coasts and seas made to match the map, so the world doesn't end at the border. It is only drawn: units can't go there, and the game itself is unchanged. A map that brings its own far land (a map of a real place, for example) shows that instead ([stored far land](../../ui/editor/map-format.md#stored-far-land)); a map can also hint at what lies beyond each side, such as a sea, mountains or where its rivers run ([hints for the far land](../../ui/editor/map-format.md#hints-for-the-far-land)).
 
 - **Off** (the default).
 - **Near:** a band of land around the map, 64 tiles wide.
