@@ -4164,6 +4164,16 @@ void Test_AIvsAI()
 			saveAt = -1.0f;
 			const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(saveName + ".sav"));
 			printf("AITEST saved %d to %s at t=%.2f\n", (int)server.saveGame(path.c_str()), path.c_str(), server.timeManager.currentTime);
+			// the navies as saved, for runSave's "navalExpect": the loaded game's must be the same
+			if (FILE* nf = fopen((path + ".naval-expect.txt").c_str(), "wb")) {
+				const std::string nt = Naval::SaveText();
+				fwrite(nt.data(), 1, nt.size(), nf);
+				fclose(nf);
+				int ferries = 0, colonies = 0;
+				for (size_t at = 0; (at = nt.find("FERRY ", at)) != std::string::npos; at++) ferries++;
+				for (size_t at = 0; (at = nt.find("COLONY ", at)) != std::string::npos; at++) colonies++;
+				printf("AITEST naval saved: %zu bytes, %d ferries, %d colonies\n", nt.size(), ferries, colonies);
+			}
 		}
 		if (server.replay) {
 			if (!server.replayEvent())
@@ -11724,6 +11734,32 @@ void Test_RunSave()
 	std::map<uint32_t, int> unreachableBy;
 	g_unreachableBy = &unreachableBy;
 	printf("RUNSAVE %s: %zu objects, ministries %d\n", path.c_str(), server.idmap.size(), (int)server.aiMinistries);
+	// ("navalExpect": true) the AIs' navies as loaded against those the AI test wrote when it saved
+	// (<save>.naval-expect.txt); at the end the colonies' census
+	const bool navalExpect = cfg.value("navalExpect", false);
+	if (navalExpect) {
+		std::string want;
+		if (FILE* nf = fopen((path + ".naval-expect.txt").c_str(), "rb")) {
+			char buf[4096];
+			size_t n;
+			while ((n = fread(buf, 1, sizeof(buf), nf)) > 0)
+				want.append(buf, n);
+			fclose(nf);
+		}
+		const std::string got = Naval::SaveText();
+		printf("RUNSAVE naval same %d (%zu bytes saved, %zu loaded)\n", (int)(!want.empty() && got == want), want.size(), got.size());
+		if (got != want) {
+			size_t i = 0;
+			while (i < got.size() && i < want.size() && got[i] == want[i])
+				i++;
+			const size_t ls = want.rfind('\n', i == 0 ? 0 : i - 1);
+			const size_t from = ls == std::string::npos ? 0 : ls + 1;
+			printf("RUNSAVE naval saved:  %s\n", want.substr(from, want.find('\n', from) - from).c_str());
+			printf("RUNSAVE naval loaded: %s\n", got.substr(from, got.find('\n', from) - from).c_str());
+		}
+		for (ServerGameObject* pl : Naval::AIPlayers())
+			printf("RUNSAVE colonies at the start, player %u: %s\n", pl->id, Naval::ColonyCensus(pl).c_str());
+	}
 	PrintAimedAt(server, cfg.value("aimedAt", std::string("Scout")).c_str());
 	fflush(stdout);
 	const float start = server.timeManager.currentTime;
@@ -11899,6 +11935,9 @@ void Test_RunSave()
 			order ? server.gameSet->orders.getString(order->blueprint).c_str() : "no order", t ? " -> " : "", t ? (t->blueprint->getFullName() + " " + std::to_string(t->id)).c_str() : "",
 			(int)p->movementController.isMoving());
 	}
+	if (navalExpect)
+		for (ServerGameObject* pl : Naval::AIPlayers())
+			printf("RUNSAVE colonies at the end, player %u: %s; %s\n", pl->id, Naval::ColonyCensus(pl).c_str(), Naval::Census(pl).c_str());
 	g_unreachableBy = nullptr;
 	fflush(stdout);
 }
@@ -14066,6 +14105,7 @@ void Test_NavalAI()
 	};
 	const int minutes = getenv("WKB_NAVAL_MINUTES") ? atoi(getenv("WKB_NAVAL_MINUTES")) : 35;
 	const char* only = getenv("WKB_NAVAL_ONLY"); // one kind (or "ferry" for the first part alone)
+	std::string navalSaved, navalSavedKind; // the first kind's navies as saved at its end
 
 	// ---- 1. The sea and the ferry's mechanics: six spearmen ferried across ----
 	if (!only || !strcmp(only, "ferry")) {
@@ -14199,6 +14239,29 @@ void Test_NavalAI()
 			playersOk += st.docksLaid > 0 && st.shipsOrdered > 0 && st.ferriesSent > 0 && st.unitsLanded > 0 && attacked;
 		}
 		check(playersOk >= 1, kind + ": an AI built a dock and ships, ferried an army across, landed it and attacked (" + std::to_string(playersOk) + " of 2)");
+		// the navies through a save (the "naval" section): saved at the end, loaded below
+		if (!navalSaved.empty())
+			continue;
+		const std::string file = PathToUtf8(g_userPath / "saved" / "Save_Games" / "wkbai naval test.sav");
+		check(server.saveGame(file.c_str()), kind + ": saved");
+		navalSaved = Naval::SaveText();
+		navalSavedKind = kind;
+	}
+	if (!navalSaved.empty()) {
+		Server server;
+		server.loadSaveGame("Save_Games\\wkbai naval test.sav");
+		const std::string loaded = Naval::SaveText();
+		int ferries = 0, colonies = 0;
+		for (size_t at = 0; (at = navalSaved.find("FERRY ", at)) != std::string::npos; at++) ferries++;
+		for (size_t at = 0; (at = navalSaved.find("COLONY ", at)) != std::string::npos; at++) colonies++;
+		check(loaded == navalSaved, navalSavedKind + ": the navies loaded as saved (" + std::to_string(navalSaved.size()) + " bytes, " + std::to_string(ferries) + " ferries, "
+			+ std::to_string(colonies) + " colonies)");
+		StepServer(server, 50 * 60);
+		int ships = 0;
+		for (uint32_t id : { 1027u, 1030u })
+			if (ServerGameObject* p = server.findObject(id))
+				ships += (int)Naval::Ships(p).size();
+		check(ships > 0, navalSavedKind + ": a minute on after loading, " + std::to_string(ships) + " ships");
 	}
 	printf("NAVAL %s (%d)\n", failures ? "FAILED" : "all ok", failures);
 	fflush(stdout);

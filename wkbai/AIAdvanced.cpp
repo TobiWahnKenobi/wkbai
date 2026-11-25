@@ -1067,7 +1067,10 @@ std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const 
 			const float d2 = (u->position - base).sqlen2xz();
 			const bool idle = !u->orderConfig.getCurrentOrder();
 			ServerGameObject* tg = idle ? nullptr : targetOf(u);
-			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
+			// (an enemy soldier: an archer kiting, "Skirmish Fire Arrow", has itself as its target; on 3
+			// Isles seed 7 the ministry's 53 archers kited at their palace for five minutes, none in the
+			// pool, while the aggressive AI's landings killed about 120 peasants)
+			const bool fighting = tg && IsSoldier(tg) && ::IsEnemy(gameObj, tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
 			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
 				pool.push_back(u);
 		}
@@ -1212,7 +1215,7 @@ void AIController::warUpdate()
 			if (weatherHolds(u->id))
 				continue;
 			ServerGameObject* tg = targetOf(u);
-			if (!enemies.empty() && (!tg || !IsSoldier(tg)))
+			if (!enemies.empty() && (!tg || !IsSoldier(tg) || !::IsEnemy(gameObj, tg)))
 				if (ServerGameObject* e = NearestEnemy(enemies, u->position))
 					AIAttack(u, e);
 		}
@@ -1373,7 +1376,7 @@ void AIController::warUpdate()
 				continue;
 			const std::vector<ServerGameObject*> soldiers = EnemiesNear(gameObj, u->position, 30.0f, false);
 			ServerGameObject* tg = targetOf(u);
-			if (!soldiers.empty() && (!tg || !IsSoldier(tg))) {
+			if (!soldiers.empty() && (!tg || !IsSoldier(tg) || !::IsEnemy(gameObj, tg))) {
 				if (ServerGameObject* e = NearestEnemy(soldiers, u->position)) {
 					AIAttack(u, e);
 					warEngaged++;

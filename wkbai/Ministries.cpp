@@ -438,6 +438,14 @@ std::string Ministries::saveText() const
 			for (uint32_t u : m.units)
 				out += " " + std::to_string(u);
 			out += "\n";
+			// (at sea: "MISSION_SEA <id> <ferry> <landed> <n> <more ferries...>"; the ferries are in
+			// the naval layer's own section, Naval::SaveText)
+			if (m.ferry || !m.moreFerries.empty() || m.landed) {
+				out += "MISSION_SEA " + std::to_string(m.id) + " " + std::to_string(m.ferry) + " " + (m.landed ? "1" : "0") + " " + std::to_string(m.moreFerries.size());
+				for (uint32_t f : m.moreFerries)
+					out += " " + std::to_string(f);
+				out += "\n";
+			}
 		}
 		for (const auto& d : g->departments) {
 			out += "DEPT " + std::string(DeptName(d->id())) + " " + Num(d->nextAt) + " " + std::to_string(d->thinks) + "\n";
@@ -558,6 +566,18 @@ void Ministries::loadText(Server& server, const std::string& text)
 			for (uint32_t i = 0; i < n && i < 10000; i++)
 				m.units.push_back(u32());
 			g->missions.push_back(std::move(m));
+		}
+		else if (tag == "MISSION_SEA") {
+			auto u32 = [&]() { return (uint32_t)strtoul(word(rest, p).c_str(), nullptr, 10); };
+			const uint32_t id = u32();
+			for (Mission& m : g->missions)
+				if (m.id == id) {
+					m.ferry = u32();
+					m.landed = word(rest, p) == "1";
+					const uint32_t n = u32();
+					for (uint32_t i = 0; i < n && i < 64; i++)
+						m.moreFerries.push_back(u32());
+				}
 		}
 	}
 	// the war layer leaves the missions' units alone from the first step

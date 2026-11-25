@@ -570,7 +570,8 @@ namespace {
 			// the ministry side ended with half the characters of the same General without it)
 			const float threat = (float)g.board.get("intel.threat.home");
 			int guard = std::max(6, (int)std::ceil(home.size() * (0.15f + 0.25f * (1.0f - g.personality.aggression))));
-			if (threat > 0.0f)
+			const float landed = (float)g.board.get("intel.landed"), landedPower = (float)g.board.get("intel.landedPower");
+			if (threat > 0.0f || landed >= 3.0f)
 				guard = std::max(guard, (int)home.size() / 2);
 			{
 				// (against all the known neighbours: the strongest and half of each other's army; with three
@@ -616,9 +617,12 @@ namespace {
 				// at home; the threat map's 250 m called them back when the wave was in the town already)
 				const float approach = (float)g.board.get("intel.approachPower");
 				const bool warned = g.board.get("intel.approach") >= 5.0 && approach > Tune("recallFactor", 1.2f) * homePower + 50.0f;
-				const bool recall = (ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f) || warned;
+				// (and a landing anywhere on the home's island over what is at home: Intelligence's intel.landed)
+				const bool landing = landed >= 3.0f && landedPower > Tune("recallFactor", 1.2f) * homePower + 50.0f;
+				const bool recall = (ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f) || warned || landing;
 				if (recall && g.board.get("war.recall") == 0.0)
-					g.log(WAR, "the missions come home: %s", palaceUnmet ? "the palace's attackers outmatch what is at home" : "a threat at home");
+					g.log(WAR, "the missions come home: %s", palaceUnmet ? "the palace's attackers outmatch what is at home"
+						: landing && !warned ? "a landing on the home's island" : "a threat at home");
 				g.board.report("war.recall", recall ? 1.0 : 0.0);
 			}
 			g.board.report("war.available", available);

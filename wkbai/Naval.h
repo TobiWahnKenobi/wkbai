@@ -34,6 +34,7 @@ namespace Naval {
 		uint32_t mission = 0; // the ministry's mission
 		float since = 0.0f, stateSince = 0.0f, nextNudge = 0.0f, nextSail = 0.0f;
 		int landed = 0; // passengers put ashore
+		int sails = 0;  // the ship sent to its boarders (BOARDING); after 3 the boarders walk to it
 	};
 
 	// A colony: the player's foothold on another island for its resources (not in WKB.exe, whose AI
@@ -100,6 +101,10 @@ namespace Naval {
 		float nextColonyCheck = 0.0f, nextFounding = 0.0f;
 		int coloniesFounded = 0, colonyManors = 0, routesOpened = 0;
 		std::map<int, std::pair<int, float>> colonyFails; // island -> (settler ferries lost, left alone until)
+		// a Castle sooner for a colony's Manor (PushCastle): its building's foundation, the count
+		uint32_t castleFoundation = 0;
+		int castlesLaid = 0;
+		float nextCastleTry = 0.0f;
 	};
 
 	// every AI player's step (AIController::update), with "aiNaval" on
@@ -131,6 +136,8 @@ namespace Naval {
 	// the land region of the player's home (its palace, else its first building) for a Peasant's
 	// movement class (set in cls); -1 when it has none
 	int HomeLandRegion(ServerGameObject* player, int* cls);
+	// the land region at (or within 4 tiles of) a place for a movement class; -1 when none
+	int LandRegionAt(int cls, const Vector3& place);
 	// the land regions (a Peasant's class, set in cls) where the player has peasants (its home's
 	// too), sorted; looked up again once a game second
 	const std::vector<int>& PeasantRegions(ServerGameObject* player, int* cls);
@@ -145,6 +152,15 @@ namespace Naval {
 	std::string ColonyCensus(ServerGameObject* player);
 	// a ship on a colony's supply route (not for ferries)
 	bool OnRoute(ServerGameObject* player, uint32_t ship);
+	// The AI players' navies for the save file's "naval" section: per player its State (the map's
+	// reading, the dock, the counts), its ferries, builders and colonies, the units the layer holds;
+	// LoadText puts them back (the units held again from the scripts and the ministry's labour).
+	// Before 2026-11-22 not saved: a loaded game's ferries were taken up again by their ships, the
+	// colonies' villages found again, but not their route's cog.
+	std::string SaveText();
+	// the players with a navy's state (for the tests)
+	std::vector<ServerGameObject*> AIPlayers();
+	void LoadText(const std::string& text);
 	// the type of a land unit for the map's regions (a Spearman, else a Peasant)
 	const GameObjBlueprint* LandType();
 	const GameObjBlueprint* BoatType();

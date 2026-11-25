@@ -9,6 +9,7 @@
 //   thread meanwhile and taken at this think: the same map whatever the threads' speed.
 
 #include "MinistryDepartments.h"
+#include "Naval.h"
 #include "AIUtil.h"
 #include "server.h"
 #include "terrain.h"
@@ -293,6 +294,30 @@ namespace {
 					g.log(INTELLIGENCE, "warning: %d enemy fighters within 500 m (power %.0f)", n, power);
 				g.board.report("intel.approach", n);
 				g.board.report("intel.approachPower", power);
+			}
+			// the landings: enemy fighters seen in the last minute anywhere on the home's land, where no
+			// rival's palace stands on it (an island: they came by sea). The warning's 500 m missed them
+			// (3 Isles seed 7: the aggressive AI's 37 landed at the villages and the Stockade, the missions
+			// stayed out, and about 120 of the ministry's peasants died)
+			{
+				int n = 0;
+				float power = 0.0f;
+				int cls = -1;
+				const int region = myPalace && !(MinOff() & 524288) ? Naval::HomeLandRegion(me, &cls) : -1;
+				bool shared = region < 0;
+				for (ServerGameObject* p : enemies)
+					if (ServerGameObject* palace = AIUtil::Palace(p); palace && !shared)
+						shared = Naval::LandRegionAt(cls, palace->position) == region;
+				if (!shared)
+					for (const auto& [id, s] : pic.sightings)
+						if (s.fighter && now - s.seen < 60.0f && Naval::LandRegionAt(cls, Vector3(s.x, 0.0f, s.z)) == region) {
+							n++;
+							power += s.power;
+						}
+				if (n >= 3 && g.board.get("intel.landed") < 3.0)
+					g.log(INTELLIGENCE, "a landing: %d enemy fighters on the home's island (power %.0f)", n, power);
+				g.board.report("intel.landed", n);
+				g.board.report("intel.landedPower", power);
 			}
 			if (thinks % 15 == 0)
 				g.log(INTELLIGENCE, "%d sightings of %zu enemies; the threat at home %.0f", total, enemies.size(),
