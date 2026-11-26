@@ -39,7 +39,7 @@ struct Server;
 namespace MapFolder {
 	constexpr int FORMAT_VERSION = 1;
 	// the compiler's own version: a new one makes every cache stale
-	constexpr int COMPILER_VERSION = 4; // 2: the ground by rule (MapMaterials.h); 3: patches where the solver left a tile, scatter masks; 4: objects by the server's placement rules (MapObjects.h)
+	constexpr int COMPILER_VERSION = 5; // 2: the ground by rule (MapMaterials.h); 3: patches where the solver left a tile, scatter masks; 4: objects by the server's placement rules (MapObjects.h); 5: player ids as the original maps' (Neutral 1026, players from 1027)
 	constexpr int HAND_ZERO = 32768;
 
 	// whether a path names a map folder (ends in ".wkbai", with or without a slash)

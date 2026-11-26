@@ -905,14 +905,25 @@ namespace {
 		return buf;
 	}
 
-	// A level for a map without level.txt: the Neutral Player and map.json's players (no objects
-	// yet; the rules add them), all at war with each other
+	// A level for a map without level.txt: the Neutral Player, map.json's players and the
+	// Baresark Player (no objects yet; the rules add them), the players all at war with each other.
+	// Numbered as every original map is (LEVEL 1050, LANDSCAPE 1032, the Neutral Player 1026, the
+	// players 1027, 1030, 1033 ... 1048, the Baresark Player 1037), since the game set names those
+	// ids (FINDER_SPECIFIC_ID 1026, 1027, 1030 ... in Diplomacy, Cart Death, the churches, the Flag
+	// Positioner's 1037). With 3, 10, 11, ... a generated map's scripts found no CONTROLLER (the
+	// user's log on 8 Player Lake District). The rules' objects start at 1100.
+	constexpr uint32_t ORIGINAL_NEUTRAL = 1026, ORIGINAL_FIRST_PLAYER = 1027, ORIGINAL_PLAYER_STEP = 3, ORIGINAL_BARESARK = 1037;
 	std::string SkeletonWorld(const MapJson& m, const std::string& mapPath, std::vector<uint32_t>& playerIds)
 	{
-		const uint32_t levelId = 1, landscapeId = 2, neutral = 3;
+		const uint32_t levelId = 1050, landscapeId = 1032, neutral = ORIGINAL_NEUTRAL, baresark = ORIGINAL_BARESARK;
 		playerIds.clear();
-		for (size_t i = 0; i < m.players.size(); i++)
-			playerIds.push_back(10 + (uint32_t)i);
+		for (size_t i = 0; i < m.players.size(); i++) {
+			uint32_t id = ORIGINAL_FIRST_PLAYER + ORIGINAL_PLAYER_STEP * (uint32_t)i;
+			// past the eighth player (1048), steps of 3 from 1100 (1050 is the level)
+			if (i >= 8)
+				id = 1100 + ORIGINAL_PLAYER_STEP * (uint32_t)(i - 8);
+			playerIds.push_back(id);
+		}
 		std::string w;
 		auto line = [&](const std::string& s) { w += s + "\n"; };
 		line("FORMAT SCENARIO");
@@ -940,10 +951,13 @@ namespace {
 		line("\tLOCK_COUNT 1");
 		line("END_TIME_MANAGER_STATE");
 		line("");
-		line("NEXT_UNIQUE_ID 100");
+		uint32_t lastId = 1099; // the last id handed out: the rules' objects from 1100
+		for (uint32_t id : playerIds)
+			lastId = std::max(lastId, id);
+		line("NEXT_UNIQUE_ID " + std::to_string(lastId));
 		line("");
 		line("PREDEC");
-		line("\tLEVEL \"Standard\" 1 1");
+		line("\tLEVEL \"Standard\" 1 " + std::to_string(levelId));
 		line("END_PREDEC");
 		line("");
 		line("LEVEL " + std::to_string(levelId));
@@ -971,8 +985,12 @@ namespace {
 		player(neutral, "Neutral Player", "Neutral Player", 0);
 		for (size_t i = 0; i < m.players.size(); i++)
 			player(playerIds[i], "Human Player", m.players[i].name, m.players[i].colour);
+		player(baresark, "Baresark Player", "Baresark Player", 0);
 		for (size_t i = 0; i < m.players.size(); i++)
 			line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(neutral) + " " + std::to_string(playerIds[i]) + " \"Neutral\"");
+		line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(neutral) + " " + std::to_string(baresark) + " \"Neutral\"");
+		for (size_t i = 0; i < m.players.size(); i++)
+			line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(std::min(playerIds[i], baresark)) + " " + std::to_string(std::max(playerIds[i], baresark)) + " \"Enemy\"");
 		for (size_t i = 0; i < m.players.size(); i++)
 			for (size_t k = i + 1; k < m.players.size(); k++)
 				line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(playerIds[i]) + " " + std::to_string(playerIds[k]) + " \"Enemy\"");

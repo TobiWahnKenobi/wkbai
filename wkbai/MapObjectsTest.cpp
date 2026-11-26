@@ -238,6 +238,16 @@ void Test_MapObjects()
 				}
 		};
 		walk(server.getLevel(), walk);
+		// the players numbered as the original maps', which the game set's scripts name
+		// (FINDER_SPECIFIC_ID 1026, 1027, 1030 ...; the Flag Positioner's 1037)
+		{
+			auto bpOf = [&](uint32_t id) { const CommonGameObject* o = server.findObject(id); return o ? o->blueprint->name : std::string("none"); };
+			const std::string n = bpOf(1026), p1 = bpOf(1027), p2 = bpOf(1030), p4 = bpOf(1036), b = bpOf(1037);
+			const CommonGameObject* lvl = server.getLevel();
+			check("player ids as the originals'", n == "Neutral Player" && p1 == "Human Player" && p2 == "Human Player" && p4 == "Human Player" && b == "Baresark Player"
+					&& lvl && lvl->id == 1050,
+				"1026 " + n + ", 1027 " + p1 + ", 1030 " + p2 + ", 1036 " + p4 + ", 1037 " + b + ", level " + std::to_string(lvl ? lvl->id : 0));
+		}
 		for (CommonGameObject* mo : manors) {
 			bool fits = false;
 			for (int r = 3; r <= 9 && !fits; r++)
@@ -274,7 +284,7 @@ void Test_MapObjects()
 				if (const TerrainTile* tile = t.getTile(x + t.edge, z + t.edge); tile && tile->fullOfWater) { wx = x * 5 + 2.5f, wz = z * 5 + 2.5f; break; }
 		std::string lv = Text(folder / "build" / "level.txt");
 		// the West player's block gets the house (hand-made: not in the authoring section)
-		const size_t pp = lv.find("PLAYER 10 ");
+		const size_t pp = lv.find("PLAYER 1027 ");
 		const size_t endp = pp == std::string::npos ? pp : lv.find("\tEND_PLAYER", pp);
 		bool reported = false;
 		std::string detail = "no water tile found";
