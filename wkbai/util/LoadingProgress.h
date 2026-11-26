@@ -42,6 +42,12 @@ void LoadingDetail(const std::string& detail);
 void LoadingCompilingShader(const char* name);
 // How far the step is by a count (not a checkpoint); pumps a frame on the main thread
 void LoadingCount(size_t done, size_t total);
+// A one-off within the load (made once, then cached: the generated ground transitions): while it
+// runs, the bar shows its own count under its label; afterwards the load's bar goes on where it
+// was, and its time is left out of the times kept for the next load (which won't have it)
+void LoadingOneOffBegin(const std::string& label);
+void LoadingOneOffCount(size_t done, size_t total);
+void LoadingOneOffEnd();
 // The game is on: the steps' times printed and kept for the next load
 void LoadingFinish();
 // The game left before it loaded

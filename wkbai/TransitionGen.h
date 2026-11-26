@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 
 struct TerrainTextureDatabase;
@@ -34,4 +35,10 @@ namespace TransitionGen {
 	// solver takes its pictures only for a corner pattern none of the game's has (a diagonal...).
 	// Returns the number of groups added.
 	int Add(TerrainTextureDatabase& db, const std::string& dbFile);
+	// Making the pictures takes a while (the BC7 encoding): the groups to be made are counted first,
+	// then each reported before it is made ("making ground transitions 12 of 75") on the loading
+	// screen when a load is on (LoadingCount), in the map compile's window when this thread compiles
+	// (MapFolder::ReportProgress), on the console, and to this observer (tests): (done, total, group).
+	// Nothing is reported when the cache has them all.
+	void SetProgressObserver(std::function<void(int, int, const std::string&)> observer);
 }

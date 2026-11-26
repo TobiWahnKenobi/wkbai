@@ -136,6 +136,11 @@ bool g_historyIsDefault = false; // (DEFAULT_CHECKPOINTS)
 // where the bar is: the last checkpoint met that the last load had, its time there, and when here
 double g_histMs = 0, g_reachedMs = 0;
 float g_shown = 0;
+// a one-off running (LoadingOneOffBegin): its label, count and when it began
+bool g_oneOff = false;
+std::string g_oneOffLabel;
+size_t g_oneOffDone = 0, g_oneOffTotal = 0;
+uint64_t g_oneOffStartNs = 0;
 
 std::function<void()> g_pump;
 std::thread::id g_mainThread;
@@ -300,6 +305,50 @@ void LoadingCount(size_t done, size_t total)
 	LoadingTick();
 }
 
+void LoadingOneOffBegin(const std::string& label)
+{
+	{
+		std::lock_guard<std::mutex> lock(g_mutex);
+		if (!g_active || g_oneOff)
+			return;
+		g_oneOff = true;
+		g_oneOffLabel = label;
+		g_oneOffDone = g_oneOffTotal = 0;
+		g_oneOffStartNs = SDL_GetTicksNS();
+		printf("Loading: %s (a one-off, not kept in the times)\n", label.c_str());
+		fflush(stdout);
+	}
+	LoadingTick();
+}
+
+void LoadingOneOffCount(size_t done, size_t total)
+{
+	{
+		std::lock_guard<std::mutex> lock(g_mutex);
+		if (!g_oneOff)
+			return;
+		g_oneOffDone = done;
+		g_oneOffTotal = total;
+	}
+	LoadingTick();
+}
+
+void LoadingOneOffEnd()
+{
+	{
+		std::lock_guard<std::mutex> lock(g_mutex);
+		if (!g_oneOff)
+			return;
+		g_oneOff = false;
+		// the load's clock goes on as if it hadn't run: its time out of the steps and checkpoints
+		const uint64_t took = SDL_GetTicksNS() - g_oneOffStartNs;
+		g_startNs += took;
+		printf("Loading: %s took %.0f ms\n", g_oneOffLabel.c_str(), took / 1e6);
+		fflush(stdout);
+	}
+	LoadingTick();
+}
+
 void LoadingFinish()
 {
 	std::lock_guard<std::mutex> lock(g_mutex);
@@ -311,6 +360,7 @@ void LoadingFinish()
 	printf("Loading: done in %.0f ms (the last load: %.0f ms)\n", total, g_historyTotal);
 	fflush(stdout);
 	g_active = false;
+	g_oneOff = false;
 	nlohmann::json j;
 	j["total"] = total;
 	nlohmann::json list = nlohmann::json::array();
@@ -329,6 +379,7 @@ void LoadingAbort()
 {
 	std::lock_guard<std::mutex> lock(g_mutex);
 	g_active = false;
+	g_oneOff = false;
 }
 
 LoadingView LoadingGet()
@@ -338,8 +389,14 @@ LoadingView LoadingGet()
 	if (!g_active)
 		return v;
 	v.step = g_step;
-	v.progress = computeProgress();
 	v.elapsedMs = nowMs();
+	if (g_oneOff) {
+		// (its own count on the bar; the load's place (g_shown) left as it was)
+		v.progress = g_oneOffTotal ? (float)std::min(g_oneOffDone, g_oneOffTotal) / g_oneOffTotal : 0.0f;
+		v.label = g_oneOffLabel + (g_oneOffTotal ? "  " + std::to_string(std::min(g_oneOffDone, g_oneOffTotal)) + " / " + std::to_string(g_oneOffTotal) : std::string());
+		return v;
+	}
+	v.progress = computeProgress();
 	if (g_step >= 0) {
 		v.label = STEP_LABELS[g_step];
 		if (!g_detail.empty())
