@@ -686,6 +686,24 @@ namespace {
 		const size_t b = line.find_last_not_of(" \t\r\n");
 		return line.substr(a, b - a + 1);
 	}
+	// an object's line without its blueprint, "<CLASS> <id>", as the original's levels write many
+	// (the blueprint is in PREDEC): the class and id
+	bool BareObjectLine(const std::string& line, std::string& cls, uint32_t& id)
+	{
+		const std::string t = Trimmed(line);
+		const size_t sp = t.find(' ');
+		if (sp == std::string::npos)
+			return false;
+		cls = t.substr(0, sp);
+		if (Tags::GAMEOBJCLASS_tagDict.getTagID(cls.c_str()) < 0)
+			return false;
+		char* end = nullptr;
+		const unsigned long v = strtoul(t.c_str() + sp + 1, &end, 10);
+		if (!end || end == t.c_str() + sp + 1 || *end != '\0')
+			return false;
+		id = (uint32_t)v;
+		return true;
+	}
 	// an object's line "<CLASS> <id> "<blueprint>"": the class, id and blueprint
 	bool ObjectLine(const std::string& line, std::string& cls, uint32_t& id, std::string& bp)
 	{
@@ -747,8 +765,8 @@ namespace {
 		}
 		return std::string::npos;
 	}
-	// PREDEC made again from the objects' lines (as Server::saveGame writes it); NEXT_UNIQUE_ID past
-	// the highest id
+	// PREDEC made again from the objects' lines (as Server::saveGame writes it; the old PREDEC for lines
+	// without a blueprint); NEXT_UNIQUE_ID raised to the highest id when below it
 	void RebuildPredec(std::vector<std::string>& lines)
 	{
 		std::map<std::pair<int, std::string>, std::vector<uint32_t>> byType;
@@ -756,6 +774,12 @@ namespace {
 		std::string levelBp = "Standard";
 		size_t predecStart = std::string::npos, predecEnd = std::string::npos;
 		bool inPredec = false;
+		// the old PREDEC's blueprint per id: the original's levels name an object's blueprint only
+		// there ("PLAYER 1026" in the world); rebuilt from the named lines alone, their PREDEC came
+		// out empty and the level didn't load (test 99: 10 original maps crashed when imported)
+		std::map<uint32_t, std::pair<int, std::string>> declared;
+		std::pair<int, std::string> current{ -1, "" };
+		std::vector<std::pair<std::string, uint32_t>> bare; // class, id
 		for (size_t i = 0; i < lines.size(); i++) {
 			const std::string t = Trimmed(lines[i]);
 			if (t == "PREDEC") { predecStart = i; inPredec = true; continue; }
@@ -765,6 +789,25 @@ namespace {
 					const size_t q = t.find('"'), q2 = t.find('"', q + 1);
 					if (q != std::string::npos && q2 != std::string::npos)
 						levelBp = t.substr(q + 1, q2 - q - 1);
+					continue;
+				}
+				// <CLASS> "<blueprint>" <count> <ids...>, the ids maybe running on over more lines
+				std::istringstream in(t);
+				std::string first;
+				in >> first;
+				const size_t q = t.find('"'), q2 = q == std::string::npos ? q : t.find('"', q + 1);
+				const int cls = Tags::GAMEOBJCLASS_tagDict.getTagID(first.c_str());
+				if (cls >= 0 && q2 != std::string::npos) {
+					current = { cls, t.substr(q + 1, q2 - q - 1) };
+					std::istringstream r(t.substr(q2 + 1));
+					uint32_t count, id;
+					r >> count;
+					while (r >> id) declared[id] = current;
+				}
+				else if (current.first >= 0) {
+					std::istringstream r(t);
+					uint32_t id;
+					while (r >> id) declared[id] = current;
 				}
 				continue;
 			}
@@ -778,6 +821,15 @@ namespace {
 				byType[{ Tags::GAMEOBJCLASS_tagDict.getTagID(cls.c_str()), bp }].push_back(id);
 				maxId = std::max(maxId, id);
 			}
+			else if (BareObjectLine(lines[i], cls, id) && cls != "LEVEL")
+				bare.push_back({ cls, id });
+		}
+		for (const auto& [cls, id] : bare) {
+			auto it = declared.find(id);
+			if (it == declared.end())
+				continue; // no blueprint known: left out, as the server would
+			byType[it->second].push_back(id);
+			maxId = std::max(maxId, id);
 		}
 		maxId = std::max({ maxId, levelId, landscapeId });
 		if (predecStart == std::string::npos || predecEnd == std::string::npos)
@@ -802,9 +854,14 @@ namespace {
 		lines.insert(lines.begin() + predecStart + 1, predec.begin(), predec.end());
 		for (std::string& l : lines)
 			if (Trimmed(l).rfind("NEXT_UNIQUE_ID ", 0) == 0) {
+				// the last id handed out: the server's allocator goes past it (++, skipping ids in use,
+				// Server::createObject), so a level may well hold an object with that id. Raised only
+				// when an object's id lies above it, and then to that id: "past the highest" (maxId + 1)
+				// moved every id made in play by one on original maps whose NEXT_UNIQUE_ID equals an
+				// object's id (Tribes Unite: 6044), and test 99's imports played otherwise (18 of 54)
 				const uint32_t next = (uint32_t)strtoul(Trimmed(l).c_str() + 15, nullptr, 10);
-				if (next <= maxId)
-					l = "NEXT_UNIQUE_ID " + std::to_string(maxId + 1) + "\n";
+				if (next < maxId)
+					l = "NEXT_UNIQUE_ID " + std::to_string(maxId) + "\n";
 				break;
 			}
 	}
@@ -817,7 +874,7 @@ namespace {
 				maxId = std::max(maxId, (uint32_t)strtoul(t.c_str() + 15, nullptr, 10) - 1);
 			std::string cls, bp;
 			uint32_t id;
-			if (ObjectLine(l, cls, id, bp))
+			if (ObjectLine(l, cls, id, bp) || (BareObjectLine(l, cls, id) && cls != "LEVEL"))
 				maxId = std::max(maxId, id);
 		}
 		return maxId + 1;
@@ -848,14 +905,25 @@ namespace {
 		return buf;
 	}
 
-	// A level for a map without level.txt: the Neutral Player and map.json's players (no objects
-	// yet; the rules add them), all at war with each other
+	// A level for a map without level.txt: the Neutral Player, map.json's players and the
+	// Baresark Player (no objects yet; the rules add them), the players all at war with each other.
+	// Numbered as every original map is (LEVEL 1050, LANDSCAPE 1032, the Neutral Player 1026, the
+	// players 1027, 1030, 1033 ... 1048, the Baresark Player 1037), since the game set names those
+	// ids (FINDER_SPECIFIC_ID 1026, 1027, 1030 ... in Diplomacy, Cart Death, the churches, the Flag
+	// Positioner's 1037). With 3, 10, 11, ... a generated map's scripts found no CONTROLLER (the
+	// user's log on 8 Player Lake District). The rules' objects start at 1100.
+	constexpr uint32_t ORIGINAL_NEUTRAL = 1026, ORIGINAL_FIRST_PLAYER = 1027, ORIGINAL_PLAYER_STEP = 3, ORIGINAL_BARESARK = 1037;
 	std::string SkeletonWorld(const MapJson& m, const std::string& mapPath, std::vector<uint32_t>& playerIds)
 	{
-		const uint32_t levelId = 1, landscapeId = 2, neutral = 3;
+		const uint32_t levelId = 1050, landscapeId = 1032, neutral = ORIGINAL_NEUTRAL, baresark = ORIGINAL_BARESARK;
 		playerIds.clear();
-		for (size_t i = 0; i < m.players.size(); i++)
-			playerIds.push_back(10 + (uint32_t)i);
+		for (size_t i = 0; i < m.players.size(); i++) {
+			uint32_t id = ORIGINAL_FIRST_PLAYER + ORIGINAL_PLAYER_STEP * (uint32_t)i;
+			// past the eighth player (1048), steps of 3 from 1100 (1050 is the level)
+			if (i >= 8)
+				id = 1100 + ORIGINAL_PLAYER_STEP * (uint32_t)(i - 8);
+			playerIds.push_back(id);
+		}
 		std::string w;
 		auto line = [&](const std::string& s) { w += s + "\n"; };
 		line("FORMAT SCENARIO");
@@ -883,10 +951,13 @@ namespace {
 		line("\tLOCK_COUNT 1");
 		line("END_TIME_MANAGER_STATE");
 		line("");
-		line("NEXT_UNIQUE_ID 100");
+		uint32_t lastId = 1099; // the last id handed out: the rules' objects from 1100
+		for (uint32_t id : playerIds)
+			lastId = std::max(lastId, id);
+		line("NEXT_UNIQUE_ID " + std::to_string(lastId));
 		line("");
 		line("PREDEC");
-		line("\tLEVEL \"Standard\" 1 1");
+		line("\tLEVEL \"Standard\" 1 " + std::to_string(levelId));
 		line("END_PREDEC");
 		line("");
 		line("LEVEL " + std::to_string(levelId));
@@ -914,8 +985,12 @@ namespace {
 		player(neutral, "Neutral Player", "Neutral Player", 0);
 		for (size_t i = 0; i < m.players.size(); i++)
 			player(playerIds[i], "Human Player", m.players[i].name, m.players[i].colour);
+		player(baresark, "Baresark Player", "Baresark Player", 0);
 		for (size_t i = 0; i < m.players.size(); i++)
 			line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(neutral) + " " + std::to_string(playerIds[i]) + " \"Neutral\"");
+		line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(neutral) + " " + std::to_string(baresark) + " \"Neutral\"");
+		for (size_t i = 0; i < m.players.size(); i++)
+			line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(std::min(playerIds[i], baresark)) + " " + std::to_string(std::max(playerIds[i], baresark)) + " \"Enemy\"");
 		for (size_t i = 0; i < m.players.size(); i++)
 			for (size_t k = i + 1; k < m.players.size(); k++)
 				line("\tDIPLOMATIC_STATUS_BETWEEN " + std::to_string(playerIds[i]) + " " + std::to_string(playerIds[k]) + " \"Enemy\"");
