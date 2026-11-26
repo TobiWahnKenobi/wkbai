@@ -531,6 +531,8 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	// engine/ministry-ai.md). At most 0.75 of the palaces' distance along the farther axis, so a close
 	// start keeps its own ground.
 	std::vector<std::pair<Vector3, float>> doorsteps;
+	// every player's city rectangles, gathered once a search (StampdownPlan::cityRectangles)
+	std::vector<CommonGameObject::CityRectangle> cities;
 	void setDoorsteps(ScriptContext* ctx) {
 		doorsteps.clear();
 		Server* srv = Server::instance;
@@ -614,7 +616,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 				if (!StampdownPlan::tileTerrainAllowed(server, to, px, pz))
 					return false;
 				// no farm in a city, past the walls (the play test: a farmer's farm inside them)
-				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInAnyCity(server, px, pz))
+				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInRectangles(cities, px, pz))
 					return false;
 				// not across a gate's way out (a blocking tile of the footprint; StampdownPlan.h)
 				// (walls and gates join there)
@@ -638,8 +640,12 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	std::pair<int, int> findPos(CommonGameState* server, int ox, int oz) {
 		if (canBuildOn(server, ox, oz))
 			return { ox, oz };
+		// out to 128 tiles (640 m) at most, not the whole map: a search that finds nothing tries
+		// every tile in reach, and on the 1,084-tile Britain maps, their farmland under forest, one
+		// such search tried millions (frames of seconds, 2026-11-26). The original maps are 256 tiles
+		// at most, their sites found well inside this.
 		auto area = server->terrain->getNumPlayableTiles();
-		int maxr = std::max(area.first, area.second);
+		int maxr = std::min(std::max(area.first, area.second), 128);
 		for (int r = 1; r < maxr; r++) {
 			int x = ox + r;
 			int z = oz;
@@ -676,6 +682,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		const Vector3 asked = po.position;
 		setReach(ctx, po.position);
 		setDoorsteps(ctx);
+		cities = StampdownPlan::cityRectangles(ctx->gameState);
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
 		const int sx = ox, sz = oz;

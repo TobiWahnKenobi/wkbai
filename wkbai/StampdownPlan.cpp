@@ -65,6 +65,21 @@ bool StampdownPlan::tileInAnyCity(CommonGameState* gameState, int tx, int tz)
 	return false;
 }
 
+std::vector<CommonGameObject::CityRectangle> StampdownPlan::cityRectangles(CommonGameState* gameState)
+{
+	std::vector<CommonGameObject::CityRectangle> rects;
+	const CommonGameObject* level = gameState->getLevel();
+	if (!level)
+		return rects;
+	for (const auto& [type, players] : level->children)
+		for (const CommonGameObject* player : players)
+			for (const auto& [ctype, objs] : player->children)
+				for (const CommonGameObject* city : objs)
+					if (city->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+						rects.insert(rects.end(), city->cityRectangles.begin(), city->cityRectangles.end());
+	return rects;
+}
+
 bool StampdownPlan::tileBesideGate(CommonGameState* gameState, int tx, int tz)
 {
 	if (!gameState->terrain || !gameState->tiles)
