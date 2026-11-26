@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/generated-transitions#generated-transitions, mechanic/far-land#stored-far-land, mechanic/far-land-hints#hints-for-the-far-land, mechanic/water-checks#the-water-checks, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/map-bases#bases-from-rules, mechanic/map-fairness#placement-and-fairness-checks, mechanic/generated-transitions#generated-transitions, mechanic/far-land#stored-far-land, mechanic/far-land-hints#hints-for-the-far-land, mechanic/water-checks#the-water-checks, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -70,9 +70,24 @@ The game's textures have no transition for many pairs of grounds, such as grass 
 
 With both, the tiles where no picture fits are rare: on large maps of real, hilly land a few dozen, where they had been thousands. The build's report still names them.
 
+## Bases from rules
+
+`map.json`'s `players` and `bases` lay out the players' bases when the map is built:
+
+- **Starts:** each player's `start` is a place in metres, or `"auto"` for the build to choose one (`bases.auto` for every player without one). Chosen starts lie as far from each other as they can, away from the map's edge and from water, on ground level and roomy enough to build on.
+- **The civic centre** (a Manor unless `base` names another) goes on the nearest place near the start where the game's own rules would let a peasant build it, facing the map's middle, with a town of its own, so the player can build houses round it from the first minute.
+- **Buildings:** `buildings` (one player's, or `bases.buildings` for all) lists what else each base starts with: how many, at what distance from the civic centre, and on which side (towards the middle, away from it, or a direction). Each goes on the nearest place the game's rules allow, with a path kept free before the civic centre's door.
+- **Peasants** stand in rows before the door.
+
+The build's report (`bases`) says where each start, civic centre and building went, and names any that found no place.
+
 ## Woods and resources from rules
 
-`map.json`'s `scatter` places trees and resources for the map by rule each time it is built, as the Neutral Player's: forests on chosen materials, with their density, spacing, clumping, slope and distance from the bases, up to a most; gold and stone in groups near the bases or over the map. A forest's mix of trees can change with the height (`objectsHigh`), or follow a painted layer with `"highMask"` (for example a picture of where the pines are). Nothing is put on water, on steep ground or on another object. The build's report counts what was placed.
+`map.json`'s `scatter` places trees and resources for the map by rule each time it is built, as the Neutral Player's: forests on chosen materials, with their density, spacing, clumping, slope and distance from the bases, up to a most; gold and stone in groups near the bases or over the map.
+
+- **Forests by habitat:** a rule with `habitat` grows its forest where trees would grow: on good soil in patches, more on shaded slopes than on sunny ones, likelier near water but not in lines along it, thinning out towards the high ground, with clearings, and never on waterlogged banks. `cover` sets the share of the land forested; the rule keeps to a budget of trees per square kilometre (`maxPerKm2`, 700 by default, about what the original maps have), so the woods stay dense where they are rather than thin everywhere.
+- **Fair resources:** groups near the bases (`fair`, on by default) are laid out the same for every base: the same number, of the same size, at the same distances; only the side differs.
+- **Other rules** can follow the ground's moisture (`moisture`) or a painted layer (`densityMask`). A forest's mix of trees can change with the height (`objectsHigh`), or follow a painted layer with `"highMask"` (for example a picture of where the pines are). Nothing is put on water, on steep ground, on another object, next to a building or in a town. The resources near the bases are laid first, then the rest. The build's report counts what was placed, for each rule and each base.
 
 ## Stored far land
 
@@ -99,6 +114,13 @@ When a map folder is built, its water is checked, and the build's report (`water
 - **Falls and rapids:** every waterfall that will be drawn, with its width and drop, every placed fall that draws nothing, and the steep stretches drawn as white water.
 - **Rivers leaving the map,** and every far-land hint; a river hint with no river leaving the map there is a warning.
 
+## Placement and fairness checks
+
+The build's report (`placement`, `fairness`) and `wkbai --author describe`, for original maps too, check the objects:
+
+- **Placement:** every building against the game's own building rules, as if a peasant were putting it down there: ground, slope, room and its town. Each one that fails is named with its place. Units standing inside a building or in deep water, and resources on a building's ground, are named too.
+- **Fairness:** for each base, the wood, gold, stone and food within 200 m (`bases.fairnessRadiusM`), the ground it could farm and its nearest rival. Where the poorest base has less than three quarters of the richest's wood, gold or stone, it is a warning.
+
 The materials are data: `Maps\Materials\All_Textures.json` for the game's textures; a mod or texture set brings its own file of the same kind for its texture database.
 
 ## Heightmaps and real land
@@ -124,7 +146,7 @@ Two commands help a map maker see what can go on a map and what is on one. They 
 
 ## Designing maps with an AI assistant
 
-The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), set the water (lakes, waterways and their speeds, seas, falls and [hints for the far land](#hints-for-the-far-land)) and read [the water checks](#the-water-checks), paint the ground by rules ([the ground from rules](#the-ground-from-rules)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
+The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), set the water (lakes, waterways and their speeds, seas, falls and [hints for the far land](#hints-for-the-far-land)) and read [the water checks](#the-water-checks), lay out the [bases](#bases-from-rules) and the [woods and resources](#woods-and-resources-from-rules) and read the [placement and fairness checks](#placement-and-fairness-checks), paint the ground by rules ([the ground from rules](#the-ground-from-rules)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
 
 ## In multiplayer
 
