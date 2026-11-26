@@ -202,8 +202,14 @@ struct FinderAssociates : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return ClientAssociations(ctx, category, false);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
-		const auto &set = sctx->getSelf()->associates[category];
+		// (find: operator[] made an empty set, on the heap, for every category asked of an object
+		// that had none; the list sized once)
+		const auto& all = sctx->getSelf()->associates;
+		const auto found = all.find(category);
+		if (found == all.end()) return {};
+		const auto& set = found->second;
 		ObjectFinderResult vec;
+		if (set.size() > 1) vec.reserve(set.size());
 		for (auto& ref : set)
 			if (ref && ref->isInteractable())
 				vec.push_back(ref);
@@ -219,8 +225,12 @@ struct FinderAssociators : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return ClientAssociations(ctx, category, true);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
-		const auto &set = sctx->getSelf()->associators[category];
+		const auto& all = sctx->getSelf()->associators;
+		const auto found = all.find(category);
+		if (found == all.end()) return {};
+		const auto& set = found->second;
 		ObjectFinderResult vec;
+		if (set.size() > 1) vec.reserve(set.size());
 		for (auto& ref : set)
 			if (ref && ref->isInteractable())
 				vec.push_back(ref);
@@ -800,15 +810,22 @@ struct FinderFilter : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
 		g_scriptWork += vec.size();
-		decltype(vec) res;
-		for (CommonGameObject *obj : vec) {
+		// (the ones that pass kept in place, in their order: no second list made and freed, the
+		// heap's 2.8% of a 9000-unit battle step, docs/engine/script-profile.md)
+		const size_t n = vec.size();
+		size_t kept = 0;
+		for (size_t i = 0; i < n; i++) {
+			CommonGameObject* obj = vec[i];
 			auto _ = ctx->change(ctx->candidate, obj);
 			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
-			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f) {
-				res.push_back(obj);
-			}
+			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f)
+				vec[kept++] = obj;
 		}
-		return res;
+		if (kept == 0)
+			vec.clear();
+		else if (kept < n)
+			vec.resize(kept);
+		return vec;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		equation = gs.equations.readIndex(gsf);
