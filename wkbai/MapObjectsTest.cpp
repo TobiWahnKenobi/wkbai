@@ -244,9 +244,15 @@ void Test_MapObjects()
 			auto bpOf = [&](uint32_t id) { const CommonGameObject* o = server.findObject(id); return o ? o->blueprint->name : std::string("none"); };
 			const std::string n = bpOf(1026), p1 = bpOf(1027), p2 = bpOf(1030), p4 = bpOf(1036), b = bpOf(1037);
 			const CommonGameObject* lvl = server.getLevel();
+			// the eight players' ids hold a Human Player or nothing (no tree or deposit a script
+			// naming 1039 ... 1048 would find on a map with fewer players)
+			std::string others;
+			for (uint32_t id = 1027; id <= 1048; id += 3)
+				if (const std::string s = bpOf(id); s != "none" && s != "Human Player") others += " " + std::to_string(id) + " " + s;
 			check("player ids as the originals'", n == "Neutral Player" && p1 == "Human Player" && p2 == "Human Player" && p4 == "Human Player" && b == "Baresark Player"
-					&& lvl && lvl->id == 1050,
-				"1026 " + n + ", 1027 " + p1 + ", 1030 " + p2 + ", 1036 " + p4 + ", 1037 " + b + ", level " + std::to_string(lvl ? lvl->id : 0));
+					&& lvl && lvl->id == 1050 && others.empty(),
+				"1026 " + n + ", 1027 " + p1 + ", 1030 " + p2 + ", 1036 " + p4 + ", 1037 " + b + ", level " + std::to_string(lvl ? lvl->id : 0) + "; on the players' ids"
+					+ (others.empty() ? std::string(" nothing else") : others));
 		}
 		for (CommonGameObject* mo : manors) {
 			bool fits = false;
@@ -274,6 +280,46 @@ void Test_MapObjects()
 		check("in the game", manors.size() == 4 && manorsInCity == 4 && houseFits == 4 && standing == 28,
 			std::to_string(manors.size()) + " Manors, " + std::to_string(manorsInCity) + " in a city, a house fits by " + std::to_string(houseFits) + "; "
 				+ std::to_string(standing) + " buildings standing after " + F(server.timeManager.currentTime) + " s");
+		// the game set's scripts that name player 1026 run on a generated map: a cart beaten by
+		// three spearmen of another player loses its rider, and a "Cart sans Rider" stands there for
+		// player 1026 (Mechanics\Cart Death.cpp, as test CARTDRIVER on 4 Peaks)
+		{
+			const GameSet& gs = *server.gameSet;
+			const GameObjBlueprint* cartBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cart");
+			const GameObjBlueprint* riderlessBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cart sans Rider");
+			const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+			const int attackCmd = gs.commands.names.getIndex("Attack");
+			ServerGameObject* nameless = server.findObject(1026);
+			ServerGameObject* owner = server.findObject(1027);
+			ServerGameObject* foe = server.findObject(1030);
+			// the cart where one of the owner's peasants stands (free, walkable ground)
+			Vector3 at(-1, 0, 0);
+			if (owner)
+				for (const auto& [type, list] : owner->children)
+					for (CommonGameObject* o : list)
+						if (o->blueprint->name == "Peasant" && at.x < 0) at = o->position + Vector3(3.0f, 0, 0);
+			bool riderless = false;
+			std::string detail = "not set up";
+			if (cartBp && riderlessBp && spear && attackCmd >= 0 && nameless && owner && foe && at.x >= 0) {
+				at.y = server.terrain->getHeight(at.x, at.z);
+				SrvGORef cart = server.spawnObject(cartBp, owner, at, Vector3(0, 0, 0));
+				std::vector<SrvGORef> spearmen;
+				for (int i = 0; i < 3; i++)
+					spearmen.push_back(server.spawnObject(spear, foe, at + Vector3(3.0f + i, 0, 2.0f - i * 2.0f), Vector3(0, 0, 0)));
+				for (SrvGORef& s : spearmen)
+					if (s && cart)
+						server.issueCommand(attackCmd, s->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, cart->id, Vector3());
+				int steps = 0;
+				for (; steps < 60 * 50 && !riderless; steps += 25) {
+					Step(server, 25);
+					if (auto it = nameless->children.find(GameObjBlueprintIndex(riderlessBp)); it != nameless->children.end())
+						for (CommonGameObject* o : it->second)
+							riderless |= (o->position - at).sqlen2xz() < 20.0f * 20.0f;
+				}
+				detail = std::string("a riderless cart for player 1026 ") + (riderless ? "after " + F(steps / 50.0) + " s" : "none in 60 s");
+			}
+			check("a riderless cart for 1026", riderless, detail);
+		}
 	}
 	// 9. a building placed by hand where the rules refuse it (a house in the river): reported with
 	// its place; the bases are laid out round it again
