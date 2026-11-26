@@ -132,6 +132,8 @@ The materials are data: `Maps\Materials\All_Textures.json` for the game's textur
 
 Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. In the skirmish lobby this happens in the background, under a "Preparing the map" window with a progress bar ([the map list](../frontend/skirmish/settings.md#the-map-list)). You can delete `build\` at any time, or leave it out when you share the map.
 
+The build numbers the players as the original maps do (the Neutral Player 1026, the players from 1027), so the game's rules that name a player work on maps made in wkbai too: for example a cart that has lost its driver, the AI's diplomacy and the buildings along paths. Map folders built by an older wkbai are built again once, the first time they are loaded.
+
 ## Importing an original map
 
 `wkbai --author import "<level>"` turns an original map (for example `2 Player 4 Peaks.lvl`) into a map folder in `saved\Maps`, with every tile kept as it was. An imported map plays exactly as the original. Saving an original map from the editor also makes a map folder of it, with your changes in it.
