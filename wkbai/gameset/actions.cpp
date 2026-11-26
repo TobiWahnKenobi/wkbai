@@ -2644,7 +2644,7 @@ std::map<std::string, double> g_actionMs;
 
 void ActionSequence::run(SrvScriptContext* ctx) const {
 	ScriptMark mark(ScriptMarks::SEQUENCE, this);
-	const bool hasDebugInfo = debugInfo.get();
+	const bool hasDebugInfo = debugInfo.get() && BreakpointManager::active();
 	extern uint64_t g_scriptWork;
 	g_scriptWork += actionList.size();
 	for (size_t i = 0; i < actionList.size(); ++i) {
