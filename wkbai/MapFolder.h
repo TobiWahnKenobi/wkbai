@@ -86,6 +86,11 @@ namespace MapFolder {
 	Progress CompileProgress();
 	// set by the compiler's stages (MapMaterials' solver too)
 	void ReportProgress(const char* stage, float fraction);
+	// whether this thread is compiling a map folder now (its reports are the compile's)
+	bool CompilingOnThisThread();
+	// the ground transitions being made in this compile (TransitionGen), done of total: their own
+	// share of the bar, the compile's stages after them in the rest
+	void ReportTransitions(const std::string& stage, int done, int total);
 	std::string TerrainFileOf(const std::string& path);
 	// map.json's texture translation (.lttt) for the cache's BCM ("" when none)
 	std::string TranslationOf(const std::filesystem::path& folder);

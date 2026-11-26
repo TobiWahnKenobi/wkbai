@@ -1,7 +1,7 @@
 // wkbai - headless test of the generated ground transitions (TransitionGen.h) and the BC7 encoder
 // (gfx/Bc7Encode.h): a game atlas through the encoder and bcdec back (PSNR), the database with
 // its generated groups (corners, files, BC7 with mips), no second making from the same sources,
-// made again when the stamp is stale, and the solver's library taking them (a grass to rock
+// made again when the stamp is stale, the progress while they are made (none from the cache), and the solver's library taking them (a grass to rock
 // patch painted without a strip between). Test "Generated ground transitions" in test.cpp.
 // Licensed under the GNU General Public License 3
 
@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 	namespace fs = std::filesystem;
@@ -65,8 +66,21 @@ void Test_GeneratedTransitions()
 	const fs::path dir = g_userPath / "saved" / "Maps" / "Map_Textures" / "Generated";
 	std::error_code ec;
 	fs::remove_all(dir, ec);
+	// the progress while they are made: each reported before it is made, counted 1, 2, ... to the
+	// total, the total the number made (TransitionGen::SetProgressObserver)
+	struct Seen { int done, total; };
+	std::vector<Seen> seen;
+	TransitionGen::SetProgressObserver([&](int done, int total, const std::string&) { seen.push_back({ done, total }); });
 	TerrainTextureDatabase db;
 	db.load("Maps\\Map_Textures\\All_Textures.dat");
+	{
+		bool rising = !seen.empty();
+		for (size_t i = 0; i < seen.size(); i++)
+			rising = rising && seen[i].done == (int)i + 1 && seen[i].total == (int)seen.size();
+		check("progress", rising, std::to_string(seen.size()) + " reports, " + (seen.empty() ? std::string("none")
+			: std::to_string(seen.front().done) + " of " + std::to_string(seen.front().total) + " to " + std::to_string(seen.back().done) + " of " + std::to_string(seen.back().total)));
+	}
+	const size_t madeFirst = seen.size();
 	int generated = 0, cornersOk = 0, triples = 0;
 	std::string names;
 	for (const auto& [name, g] : db.groups) {
@@ -93,6 +107,7 @@ void Test_GeneratedTransitions()
 		triples += n == 3;
 		cornersOk += ok;
 	}
+	check("progress total", (int)madeFirst == generated, std::to_string(madeFirst) + " reported, " + std::to_string(generated) + " groups generated");
 	check("groups", generated >= 9 && triples >= 1 && cornersOk == generated, std::to_string(generated) + " generated (" + std::to_string(triples) + " triples): " + names);
 	// the files: BC7 with mips, heights 256 x 256
 	{
@@ -109,13 +124,18 @@ void Test_GeneratedTransitions()
 	{
 		const fs::path dds = dir / "GRASS1-ROCK1.dds";
 		const auto t0 = fs::last_write_time(dds, ec);
+		seen.clear();
 		TerrainTextureDatabase db2;
 		db2.load("Maps\\Map_Textures\\All_Textures.dat");
 		check("cached", fs::last_write_time(dds, ec) == t0, "the second load left the pictures alone");
+		check("no progress when cached", seen.empty(), std::to_string(seen.size()) + " reports");
 		std::ofstream(dir / "GRASS1-ROCK1.json") << "{}";
 		TerrainTextureDatabase db3;
+		seen.clear();
 		db3.load("Maps\\Map_Textures\\All_Textures.dat");
 		check("remade", fs::last_write_time(dds, ec) != t0, "a stale stamp: made again");
+		check("progress for the one", seen.size() == 1 && seen[0].done == 1 && seen[0].total == 1, std::to_string(seen.size()) + " reports");
 	}
+	TransitionGen::SetProgressObserver(nullptr);
 	printf("GENTRANS all %d\n", (int)all);
 }

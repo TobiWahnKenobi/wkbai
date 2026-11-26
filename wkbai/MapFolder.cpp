@@ -1639,6 +1639,10 @@ namespace {
 	std::recursive_mutex g_compileMutex;
 	std::mutex g_progressMutex;
 	Progress g_progress;
+	thread_local bool g_compilingHere = false; // this thread is in Compile (CompilingOnThisThread)
+	// the share of the bar the ground transitions took in this compile (ReportTransitions): the
+	// compile's own stages fill the rest
+	float g_transitionsShare = 0;
 	std::chrono::steady_clock::time_point g_stageStart;
 	std::string g_stageName;
 	std::thread g_background;
@@ -1682,8 +1686,10 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	struct Busy {
 		Busy(const fs::path& f)
 		{
+			g_compilingHere = true;
 			{
 				std::lock_guard<std::mutex> lock(g_progressMutex);
+				g_transitionsShare = 0;
 				g_progress.busy = true;
 				g_progress.map = PathToUtf8(f.stem());
 				g_stageName.clear();
@@ -1692,6 +1698,7 @@ Result Compile(const std::filesystem::path& folder, bool force)
 		}
 		~Busy()
 		{
+			g_compilingHere = false;
 			ReportProgress("done", 1);
 			std::lock_guard<std::mutex> lock(g_progressMutex);
 			g_progress.busy = false;
@@ -1792,6 +1799,25 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	return r;
 }
 
+bool CompilingOnThisThread()
+{
+	return g_compilingHere;
+}
+
+void ReportTransitions(const std::string& stage, int done, int total)
+{
+	// they take most of a first compile (a minute or two against one): 60 % of the bar
+	constexpr float SHARE = 0.6f;
+	{
+		std::lock_guard<std::mutex> lock(g_progressMutex);
+		g_transitionsShare = 0;
+	}
+	ReportProgress(stage.c_str(), 0); // (the stage's name, the cancel check)
+	std::lock_guard<std::mutex> lock(g_progressMutex);
+	g_transitionsShare = SHARE * std::clamp((float)done / std::max(total, 1), 0.0f, 1.0f);
+	g_progress.fraction = g_transitionsShare;
+}
+
 Progress CompileProgress()
 {
 	std::lock_guard<std::mutex> lock(g_progressMutex);
@@ -1812,7 +1838,7 @@ void ReportProgress(const char* stage, float fraction)
 		g_stageStart = now;
 		g_progress.stage = stage;
 	}
-	g_progress.fraction = std::clamp(fraction, 0.0f, 1.0f);
+	g_progress.fraction = std::clamp(g_transitionsShare + (1 - g_transitionsShare) * fraction, 0.0f, 1.0f);
 }
 
 std::string LevelFileIfFresh(const std::string& path)
