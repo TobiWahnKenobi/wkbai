@@ -2,6 +2,9 @@
 // Licensed under the GNU General Public License 3
 
 #include "TransitionGen.h"
+#include <functional>
+#include "MapFolder.h"
+#include "util/LoadingProgress.h"
 #include "TrnTextureDb.h"
 #include "MapMaterials.h"
 #include "file.h"
@@ -208,15 +211,17 @@ namespace {
 		return out;
 	}
 
-	// makes Generated\<name>.dds (or .png) and _BumpMap.png for the groups (false: a source is missing)
-	bool Generate(const std::string& name, const std::vector<const TerrainTextureGroup*>& groups, int pairsVersion, const fs::path& dir)
+	// makes Generated\<name>.dds (or .png) and _BumpMap.png for the groups; checkOnly: only whether
+	// they are to be made (the progress counts them first)
+	enum class Made { FRESH, STALE, MADE, MISSING };
+	Made Generate(const std::string& name, const std::vector<const TerrainTextureGroup*>& groups, int pairsVersion, const fs::path& dir, bool checkOnly)
 	{
 		const int n = (int)groups.size();
 		std::vector<std::vector<Cell>> cells;
 		for (const TerrainTextureGroup* g : groups) {
 			cells.push_back(CellsOf(*g));
 			if (cells.back().empty())
-				return false;
+				return Made::MISSING;
 		}
 		// the sources: each variant takes the groups' first and second pictures
 		std::map<std::string, Atlas> atlases;
@@ -226,9 +231,9 @@ namespace {
 			for (const Cell& c : list) {
 				if (atlases.count(c.file)) continue;
 				Atlas a;
-				if (!LoadAtlas(c.file, a)) return false;
+				if (!LoadAtlas(c.file, a)) return Made::MISSING;
 				Bitmap bm;
-				if (!LoadBump(c.file, bm)) return false;
+				if (!LoadBump(c.file, bm)) return Made::MISSING;
 				sources.push_back({ { "file", a.source }, { "size", a.bmp.width }, { "pixels", Fingerprint(a.bmp.pixels, bm.pixels) } });
 				atlases.emplace(c.file, std::move(a));
 				bumps.emplace(c.file, std::move(bm));
@@ -242,8 +247,10 @@ namespace {
 			const json old = json::parse(ss.str(), nullptr, false);
 			if (f && !old.is_discarded() && old == stamp && (fs::exists(dir / (name + ".dds")) || fs::exists(dir / (name + ".png")))
 				&& fs::exists(dir / (name + "_BumpMap.png")))
-				return true; // made already from the same sources
+				return Made::FRESH; // made already from the same sources
 		}
+		if (checkOnly)
+			return Made::STALE;
 		// the cell size: the largest source's (an HD pack's 256 pixels, else 64)
 		int cs = 64;
 		for (const auto& [f, a] : atlases) cs = std::max(cs, a.bmp.width / 4);
@@ -293,57 +300,82 @@ namespace {
 		if (!Bc7::WriteDds(PathToUtf8(dir / (name + ".dds")), rgba.data(), W, W)) {
 			fs::remove(dir / (name + ".dds"), ec);
 			if (!stbi_write_png(PathToUtf8(dir / (name + ".png")).c_str(), W, W, 4, rgba.data(), W * 4))
-				return false;
+				return Made::MISSING;
 		}
 		if (!stbi_write_png(PathToUtf8(dir / (name + "_BumpMap.png")).c_str(), 256, 256, 1, bump.data(), 256))
-			return false;
+			return Made::MISSING;
 		WriteStamp(stampPath, stamp);
 		printf("Generated transition %s: %d x %d pixels a picture (from %zu sources)\n", name.c_str(), cs, cs, sources.size());
-		return true;
+		return Made::MADE;
 	}
 
-	// adds the generated group of these base groups (2 or 3) to db, its pictures made first where
-	// the cache lacks them; false: a group db doesn't have, a transition the game has, a source missing
-	bool AddGroup(TerrainTextureDatabase& db, const std::vector<std::string>& names, int pairsVersion, const fs::path& dir)
+	// a generated group to add: its base groups and name (a pair the game has: "<A>-<B>_GEN", its
+	// patterns the game lacks: the solver takes a generated picture only for a corner pattern no
+	// game picture has, a diagonal of GRASS1-MIDHILL1...); false: a group db doesn't have, or added
+	struct Job { std::string name; std::vector<std::string> names; std::vector<const TerrainTextureGroup*> groups; Made state = Made::FRESH; };
+	bool JobFor(const TerrainTextureDatabase& db, const std::vector<std::string>& names, Job& job)
 	{
-		std::vector<const TerrainTextureGroup*> groups;
-		std::string name;
+		job.names = names;
 		for (const std::string& g : names) {
 			auto it = db.groups.find(g);
 			if (it == db.groups.end() || !it->second)
 				return false;
-			groups.push_back(it->second.get());
-			name += (name.empty() ? "" : "-") + g;
+			job.groups.push_back(it->second.get());
+			job.name += (job.name.empty() ? "" : "-") + g;
 		}
-		// a pair the game has: its patterns the game lacks (the solver takes a generated picture only
-		// for a corner pattern no game picture has: a diagonal of GRASS1-MIDHILL1...)
-		if (names.size() == 2 && (db.groups.count(name) || db.groups.count(names[1] + "-" + names[0])))
-			name += "_GEN";
-		if (db.groups.count(name))
-			return false;
-		if (!Generate(name, groups, pairsVersion, dir)) {
-			printf("Generated transition %s: a source picture is missing, left out\n", name.c_str());
-			return false;
-		}
+		if (names.size() == 2 && (db.groups.count(job.name) || db.groups.count(names[1] + "-" + names[0])))
+			job.name += "_GEN";
+		return !db.groups.count(job.name);
+	}
+
+	// the group's pictures into db (made already)
+	void AddGroup(TerrainTextureDatabase& db, const Job& job)
+	{
 		auto g = std::make_unique<TerrainTextureGroup>();
-		g->name = name;
-		const std::vector<Layout> layouts = LayoutsFor((int)names.size());
+		g->name = job.name;
+		const std::vector<Layout> layouts = LayoutsFor((int)job.names.size());
 		for (int k = 0; k < (int)layouts.size(); k++) {
 			auto t = std::make_unique<TerrainTexture>();
 			t->id = k;
 			t->grp = g.get();
 			// (a .pcx that isn't there: the loaders take its .dds or .png replacement, Bitmap::replacementFile)
-			t->file = "Generated\\" + name + ".pcx";
+			t->file = "Generated\\" + job.name + ".pcx";
 			t->startx = (k % 4) * 64;
 			t->starty = (k / 4) * 64;
 			t->width = t->height = 64;
 			for (int c = 0; c < 4; c++)
-				t->genCorners[c] = names[layouts[k].corner[c]];
+				t->genCorners[c] = job.names[layouts[k].corner[c]];
 			g->textures.emplace(k, std::move(t));
 		}
-		db.groups.emplace(name, std::move(g));
-		return true;
+		db.groups.emplace(job.name, std::move(g));
 	}
+
+	std::function<void(int, int, const std::string&)> g_observer;
+
+	// a group about to be made, done-th of total: the loading screen (when a load is on), the map
+	// compile's window (when this thread compiles), the console, a test's observer
+	void Report(int done, int total, const std::string& name)
+	{
+		printf("Making ground transitions %d of %d: %s\n", done, total, name.c_str());
+		fflush(stdout);
+		const std::string label = "making ground transitions " + std::to_string(done) + " of " + std::to_string(total);
+		if (LoadingActive()) {
+			// (a one-off: made once, then cached; its time kept out of the next load's pacing)
+			if (done == 1)
+				LoadingOneOffBegin("Making the ground transitions (once)");
+			LoadingOneOffCount((size_t)done - 1, (size_t)total); // (pumps a loading frame on the main thread)
+		}
+		if (MapFolder::CompilingOnThisThread())
+			MapFolder::ReportTransitions("the ground: " + label, done - 1, total);
+		if (g_observer)
+			g_observer(done, total, name);
+	}
+}
+
+void TransitionGen::SetProgressObserver(std::function<void(int, int, const std::string&)> observer)
+{
+	std::lock_guard<std::mutex> lock(g_mutex);
+	g_observer = std::move(observer);
 }
 
 int TransitionGen::Add(TerrainTextureDatabase& db, const std::string& dbFile)
@@ -356,7 +388,8 @@ int TransitionGen::Add(TerrainTextureDatabase& db, const std::string& dbFile)
 	const json& gt = data["generatedTransitions"];
 	const int pairsVersion = gt.value("version", 1);
 	const fs::path dir = g_userPath / "saved" / "Maps" / "Map_Textures" / "Generated";
-	int added = 0;
+	// first which groups are to be made (their count for the progress), then each made and added
+	std::vector<Job> jobs;
 	for (const char* list : { "pairs", "triples" }) {
 		const size_t want = list[0] == 'p' ? 2 : 3;
 		for (const json& p : gt.value(list, json::array())) {
@@ -365,9 +398,33 @@ int TransitionGen::Add(TerrainTextureDatabase& db, const std::string& dbFile)
 			std::vector<std::string> names;
 			for (const json& e : p)
 				if (e.is_string()) names.push_back(e.get<std::string>());
-			if (names.size() == want && AddGroup(db, names, pairsVersion, dir))
-				added++;
+			Job job;
+			if (names.size() != want || !JobFor(db, names, job))
+				continue;
+			job.state = Generate(job.name, job.groups, pairsVersion, dir, true);
+			if (job.state == Made::MISSING)
+				printf("Generated transition %s: a source picture is missing, left out\n", job.name.c_str());
+			else
+				jobs.push_back(std::move(job));
 		}
 	}
+	int toMake = 0, made = 0, added = 0;
+	for (const Job& job : jobs) toMake += job.state == Made::STALE;
+	for (Job& job : jobs) {
+		if (job.state == Made::STALE) {
+			Report(++made, toMake, job.name);
+			job.state = Generate(job.name, job.groups, pairsVersion, dir, false);
+		}
+		if (job.state == Made::MISSING)
+			continue;
+		AddGroup(db, job);
+		added++;
+	}
+	if (toMake && LoadingActive()) {
+		LoadingOneOffCount((size_t)toMake, (size_t)toMake);
+		LoadingOneOffEnd();
+	}
+	if (toMake && MapFolder::CompilingOnThisThread())
+		MapFolder::ReportTransitions("the ground: ground transitions made", toMake, toMake);
 	return added;
 }
