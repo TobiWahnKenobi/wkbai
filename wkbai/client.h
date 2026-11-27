@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include "common.h"
 #include "util/vecmat.h"
 #include "Camera.h"
@@ -51,6 +52,9 @@ struct ClientGameObject : SpecificGameObject<Client, ClientGameObject> {
 	};
 	int forestSlot = -1;
 	uint32_t forestGen = 0;
+	// set by every change the client makes to it (its messages, updatePosition): the forest's
+	// still trees not set are not looked at again (ClientInterface::forestStill)
+	bool forestDirty = true;
 	ForestKey forestKey;
 	// the server's associations, mirrored (NETCLIMSG_OBJECT_ASSOCIATION): FINDER_ASSOCIATES and
 	// FINDER_ASSOCIATORS on the client (command buttons' conditions)
@@ -68,6 +72,18 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	//GameSet *gameSet;
 
 	TimeManager timeManager;
+	// counts the colour changes (a player's: all its trees' look; ClientInterface::forestStill)
+	uint32_t forestEpoch = 0;
+	// the objects tick() steps each frame, by id: marked when a movement or a flight starts and
+	// at creation for a type laid on the ground or sounding from its animations; dropped once
+	// none of that holds (tickActiveIds: the same ids, for marking once)
+	std::vector<uint32_t> tickActive;
+	std::unordered_set<uint32_t> tickActiveIds;
+	void tickMark(const ClientGameObject* obj) {
+		if (tickActiveIds.insert(obj->id).second)
+			tickActive.push_back(obj->id);
+	}
+	static bool needsTick(const GameObjBlueprint* bp);
 
 	//ClientGameObject *level;
 	//std::map<uint32_t, ClientGameObject*> idmap;

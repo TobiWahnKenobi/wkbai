@@ -349,6 +349,14 @@ private:
 	std::vector<ExtTreeLook> extTreeLooks;
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
+	// with the forest: their slots (their owners EXT_TREE_ID_BASE + their index; forestEnd leaves
+	// them), and the forest, tree list and model count they were taken for
+	static constexpr uint32_t EXT_TREE_ID_BASE = 0xA0000000u, EXT_TREE_ID_LIMIT = 0x10000000u;
+	std::vector<uint32_t> extForestSlots;
+	uint32_t extForestGen = 0;
+	const void* extForestFor = nullptr;
+	size_t extForestModels = 0;
+	bool extTreesCounted = false;
 	void drawExtendedTrees();
 	// The forest (gfx/Forest.h): the still trees, their look worked out once and checked each
 	// frame, drawn by the enhanced renderer from GPU buffers (it gets it in its ShadowEnvironment).
@@ -372,6 +380,27 @@ private:
 	// nothing else to do for it but its picking); its slot given back
 	bool forestStill(ClientGameObject* obj, bool remembered);
 	void forestRelease(ClientGameObject* obj);
+	uint32_t forestAlloc(uint32_t owner); // a free slot (or a new one) for this owner
+	// the trees to look at again this frame (ClientGameObject::forestDirty set for them in
+	// forestBegin: the selected ones and those under a building being placed, last frame's too);
+	// all of them after a colour change (Client::forestEpoch)
+	std::vector<uint32_t> forestMarked;
+	bool forestAllDue = false;
+	uint32_t forestDueMask = 0, forestDuePhase = 0; // this frame's share looked at in full
+	uint32_t forestEpochSeen = 0;
+	// The picking of the forest's trees (forestPick, after the drawing): a grid of the slots by
+	// their spheres' centres, FOREST_CELL m a cell (the last cell: the trees too big for one),
+	// gone through along the mouse's ray. Per slot: its object (as last put in), its cell, the
+	// frame it was last looked at; per cell the same frame.
+	static constexpr float FOREST_CELL = 32.0f;
+	static constexpr int FOREST_GRID = 512; // (16 km: more than the largest map)
+	std::vector<std::vector<uint32_t>> forestGrid;
+	size_t forestGridEntries = 0;
+	std::vector<ClientGameObject*> forestObj;
+	std::vector<int32_t> forestSlotCell;
+	std::vector<uint64_t> forestPickStamp, forestCellStamp;
+	void forestGridPut(uint32_t slot, ClientGameObject* obj);
+	void forestPick();
 	ClientGameObject::ForestKey forestKeyOf(ClientGameObject* obj);
 	// the mouse ray's and the selection box's tests of an object drawn (by its bounding sphere,
 	// then its mesh)
