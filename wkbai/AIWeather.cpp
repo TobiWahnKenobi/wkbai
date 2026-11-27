@@ -80,7 +80,7 @@ namespace {
 
 	float Daylight(const ServerEnvironment& env, float t)
 	{
-		return ComputeSun(EnvDayFraction(env.settings, t), EnvYearFraction(env.settings, t), env.settings.seasons, env.state.cloudCover).daylight;
+		return ComputeSun(EnvDayFraction(env.settings, t), EnvYearFraction(env.settings, t), env.settings.seasons, env.state.cloudCover, 0.5f, env.settings.latitude).daylight;
 	}
 
 	bool OrderIs(ServerGameObject* u, int order)

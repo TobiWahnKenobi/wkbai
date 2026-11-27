@@ -56,6 +56,12 @@ struct EnvironmentSettings {
 	// tests); below 0 not chosen yet: the year 1000's for startSeason (HistoricMoonAge)
 	int moonPhase = 0;
 	float moonStart = -1.0f;
+	// the map's latitude in degrees ("latitude"; north positive, south negative, -75..75): the
+	// sun's path (how high it stands at noon, where it rises and sets) and the day's length by
+	// the season. 47 (central Europe) where a map sets none, as before; the map editor's default
+	// for a map is Britain's (MapLatitudeBritain). South of the equator the game's seasons stay
+	// the same (summer the long days), the sun at noon in the north.
+	float latitude = 47.0f;
 	// the peasants' lodging (PeasantLodging.h): "peasantsSleep" (with day and night) the peasants
 	// go into their own houses, villages, manors and castles at dusk and back to work at dawn;
 	// "farmersWinter" (with the seasons) the farmers go in at winter's first dusk and stay until
@@ -205,7 +211,18 @@ struct SunState {
 // dayFraction 0..1, yearFraction 0..1 (the sun higher in summer); clouds dim it
 // moonAge: the moon's phase (0 new, 0.5 full: opposite the sun, as without phases), its place
 // on the sky, its lit part and its light by it
-SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge = 0.5f);
+SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge = 0.5f, float latitudeDeg = 47.0f);
+// the map editor's default latitude: Britain's middle (53 degrees north)
+constexpr float MapLatitudeBritain = 53.0f;
+// the day at a latitude with the sun at a declination (degrees; the game's: +23.4 midsummer, 0 at
+// the equinoxes, -23.4 midwinter, 10 without the seasons): the hours from sunrise to sunset of a
+// 24-hour day (0 polar night, 24 midnight sun), the noon sun's height in degrees, and its
+// height over the day (24 points, an hour apart from midnight) for the editor's picture
+struct SunDay {
+	float dayHours = 12.0f, noonDeg = 45.0f;
+	float heightDeg[25] = {};
+};
+SunDay SunDayAt(float latitudeDeg, float declinationDeg);
 
 // how far the volumetric clouds' weather front has come over the camera (0: the old weather's
 // clouds overhead, 1: the new one's), set by the cloud renderer each frame (ticks: SDL_GetTicksNS

@@ -116,6 +116,9 @@ namespace MapFolder {
 	// latitude, a start by the sun, meanC, weights, the first weather, wind, height, areas, fixed)
 	// is kept for step 17.13. The settings named there, as EnvironmentSettings::apply names them.
 	std::vector<std::pair<std::string, float>> EnvironmentDefaults(const std::string& mapPath);
+	// map.json's environment.latitude (degrees north, negative south) set in a map folder, the
+	// rest of map.json as it is (the map editor's Save); false when map.json can't be read or written
+	bool SetLatitude(const std::filesystem::path& folder, float latitudeDeg);
 	// a new game on a map folder: each of those onto `settings` where it still has the lobby's
 	// default (a setting the lobby changed stays the lobby's); how many were applied
 	int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& settings);

@@ -178,6 +178,8 @@ private:
 	// Save map: wkbai's map folder saved\Maps\<name>.wkbai (MapFolder.h: the strokes into its
 	// hand layers), or with the setting "editorSaveFormat": "original" the original's files
 	// (editorSaveOriginal: Maps\<name>\<name>.bcm and Save_Games\<name>.lvl)
+	// the map's latitude in the editor: a slider, the sun's path and the day's length (MapEditor.cpp)
+	void editorLatitude();
 	bool editorSave(const std::string& name);
 	bool editorSaveOriginal(const std::string& name);
 	// test runs: "benchmark": { ..., "editorFolderTest": { "at": [x, z], "save": name } }: a raise
