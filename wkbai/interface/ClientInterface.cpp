@@ -3871,19 +3871,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (forestModel && !highlighted && drawn && drawn == drawn->getStaticModel() && ForestModelOk(drawn)) {
 		int slot = inForest ? obj->forestSlot : -1;
 		if (slot < 0) {
-			if (!forestFree.empty()) {
-				slot = (int)forestFree.back();
-				forestFree.pop_back();
-			}
-			else {
-				slot = (int)forest.trees.size();
-				forest.trees.emplace_back();
-				forestSeen.push_back(0);
-				forestOwner.push_back(0);
-			}
+			slot = (int)forestAlloc(obj->id);
 			obj->forestSlot = slot;
 			obj->forestGen = forestGen;
-			forestOwner[slot] = obj->id;
 		}
 		ForestTree t;
 		t.model = drawn;
@@ -3902,6 +3892,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		}
 		forestSeen[slot] = forestFrame;
 		obj->forestKey = forestKeyOf(obj);
+		obj->forestDirty = false;
+		forestGridPut((uint32_t)slot, obj);
 	}
 	else {
 		if (inForest)
@@ -3972,7 +3964,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		terrainSpriteContainer->addSprite(*shadowTexture, p1, p2, p3);
 	}
 
-	pickObject(obj, model, &ttpp);
+	// (a tree drawn from the forest: picked from its grid, forestPick)
+	if (!(forestOn && forestHas(obj)))
+		pickObject(obj, model, &ttpp);
 }
 
 // The mouse ray's test of an object drawn (its bounding sphere, then its mesh's triangles: the
@@ -4055,14 +4049,25 @@ bool ClientInterface::forestStill(ClientGameObject* obj, bool remembered)
 	const uint32_t slot = (uint32_t)obj->forestSlot;
 	// every so often a slot's look is worked out in full again: the seasons, the snow and the
 	// fires change the trees one by one over time (by their ids), with nothing of the tree itself
-	// changing. A 1024th... of the forest a frame: 30,000 trees every 30 frames.
-	const uint64_t period = forest.trees.size() / 1024 + 1;
-	if (slot % period == forestFrame % period)
+	// changing. A 1024th... of the forest a frame: 30,000 trees every 32 frames (forestBegin's
+	// mask, a power of two).
+	const bool due = forestAllDue || (slot & forestDueMask) == forestDuePhase;
+	// a tree nothing changed (no message for it, ClientGameObject::forestDirty; not selected or
+	// hidden by a building being placed, forestBegin marks those; not hidden by the fog of war's
+	// tree memory, FogOfWar marks those): nothing more to look at. Its picking: the forest's grid
+	// along the mouse's ray (forestPick).
+	if (slot < forestObj.size())
+		forestObj[slot] = obj; // (the object visited this frame: forestPick's)
+	if (!due && !obj->forestDirty) {
+		forestSeen[slot] = forestFrame;
+		numObjectsDrawn++;
+		return true;
+	}
+	// trees changed out of sight: drawn as last seen (FogOfWar::treeGhosts), not from the forest
+	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
 		return false;
 	ClientGameObject::ForestKey k = forestKeyOf(obj);
 	if (memcmp(&k, &obj->forestKey, sizeof(k)) != 0)
-		return false;
-	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
 		return false;
 	// worked at: it shakes (its animated model)
 	if (forestWorkedItem >= 0 && obj->getItem(forestWorkedItem) > 0.0f)
@@ -4071,10 +4076,120 @@ bool ClientInterface::forestStill(ClientGameObject* obj, bool remembered)
 		return false;
 	if (!selection.empty() && selection.count(obj))
 		return false;
+	obj->forestDirty = false;
 	forestSeen[slot] = forestFrame;
 	numObjectsDrawn++;
-	pickObject(obj, forest.trees[slot].model, nullptr);
 	return true;
+}
+
+void ClientInterface::forestGridPut(uint32_t slot, ClientGameObject* obj)
+{
+	if (forestObj.size() < forest.trees.size()) {
+		forestObj.resize(forest.trees.size(), nullptr);
+		forestSlotCell.resize(forest.trees.size(), -1);
+		forestPickStamp.resize(forest.trees.size(), 0);
+	}
+	forestObj[slot] = obj;
+	const ForestTree& t = forest.trees[slot];
+	int32_t cell = -1;
+	if (t.radius <= FOREST_CELL - 4.0f) {
+		const int cx = std::clamp((int)std::floor(t.centre.x / FOREST_CELL), 0, FOREST_GRID - 1);
+		const int cz = std::clamp((int)std::floor(t.centre.z / FOREST_CELL), 0, FOREST_GRID - 1);
+		cell = cz * FOREST_GRID + cx;
+	}
+	else
+		cell = FOREST_GRID * FOREST_GRID; // (a big one: looked at with every ray)
+	if (forestSlotCell[slot] == cell)
+		return;
+	forestSlotCell[slot] = cell;
+	if (forestGrid.empty())
+		forestGrid.resize((size_t)FOREST_GRID * FOREST_GRID + 1);
+	forestGrid[cell].push_back(slot);
+	// (a slot moved leaves its old entry behind: dropped when there are too many)
+	if (++forestGridEntries > 2 * forest.trees.size() + 4096) {
+		for (auto& c : forestGrid)
+			c.clear();
+		forestGridEntries = 0;
+		for (uint32_t i = 0; i < (uint32_t)forestSlotCell.size(); i++)
+			if (forestSlotCell[i] >= 0) {
+				forestGrid[forestSlotCell[i]].push_back(i);
+				forestGridEntries++;
+			}
+	}
+}
+
+void ClientInterface::forestPick()
+{
+	if (!forestOn || forestObj.empty() || forestGrid.empty())
+		return;
+	auto pick = [&](uint32_t slot) {
+		if (slot >= forestObj.size() || slot >= forest.trees.size() || forestPickStamp[slot] == forestFrame)
+			return;
+		forestPickStamp[slot] = forestFrame;
+		const uint32_t owner = forestOwner[slot];
+		ClientGameObject* obj = forestObj[slot];
+		const ForestTree& t = forest.trees[slot];
+		// (a tree in the forest and visited this frame: those the drawing let go it picked itself)
+		if (owner == 0 || owner >= EXT_TREE_ID_BASE || !obj || obj->id != owner || t.hidden || !t.model || forestSeen[slot] != forestFrame)
+			return;
+		pickObject(obj, t.model, nullptr);
+	};
+	// the selection box: every tree (only while it is dragged)
+	if (selBoxOn) {
+		for (uint32_t slot = 0; slot < (uint32_t)forestObj.size(); slot++)
+			pick(slot);
+		return;
+	}
+	// the cells along the ray, each with those round it (a tree's sphere reaches at most into
+	// the next cell: its radius under a cell's less the steps' half)
+	const Vector3 o = client->camera.position, d = rayDirection;
+	if (forestCellStamp.size() != forestGrid.size())
+		forestCellStamp.assign(forestGrid.size(), 0);
+	auto visit = [&](int32_t cell) {
+		if (forestCellStamp[cell] == forestFrame)
+			return;
+		forestCellStamp[cell] = forestFrame;
+		for (uint32_t slot : forestGrid[cell])
+			if (forestSlotCell[slot] == cell)
+				pick(slot);
+	};
+	visit(FOREST_GRID * FOREST_GRID);
+	const float reach = std::max(client->camera.farDist, 100.0f), step = 8.0f;
+	int lastX = INT_MIN, lastZ = INT_MIN;
+	for (float s = 0.0f; s <= reach; s += step) {
+		const Vector3 p = o + d * s;
+		if (p.y < -100.0f && d.y < 0.0f)
+			break;
+		const int cx = (int)std::floor(p.x / FOREST_CELL), cz = (int)std::floor(p.z / FOREST_CELL);
+		if (cx == lastX && cz == lastZ)
+			continue;
+		lastX = cx;
+		lastZ = cz;
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dx = -1; dx <= 1; dx++) {
+				const int x = std::clamp(cx + dx, 0, FOREST_GRID - 1), z = std::clamp(cz + dz, 0, FOREST_GRID - 1);
+				visit(z * FOREST_GRID + x);
+			}
+	}
+}
+
+uint32_t ClientInterface::forestAlloc(uint32_t owner)
+{
+	uint32_t slot;
+	if (!forestFree.empty()) {
+		slot = forestFree.back();
+		forestFree.pop_back();
+	}
+	else {
+		slot = (uint32_t)forest.trees.size();
+		forest.trees.emplace_back();
+		forestSeen.push_back(0);
+		forestOwner.push_back(0);
+	}
+	forestOwner[slot] = owner;
+	if (slot < forestObj.size())
+		forestObj[slot] = nullptr;
+	return slot;
 }
 
 void ClientInterface::forestRelease(ClientGameObject* obj)
@@ -4119,6 +4234,12 @@ void ClientInterface::forestBegin()
 		forestFree.clear();
 		forestLifted.clear();
 		forestSettings = h;
+		forestGrid.clear();
+		forestGridEntries = 0;
+		forestObj.clear();
+		forestSlotCell.clear();
+		forestPickStamp.clear();
+		forestCellStamp.clear();
 	}
 	forestOn = on;
 	if (dgfx)
@@ -4134,6 +4255,34 @@ void ClientInterface::forestBegin()
 			forest.markChanged(slot);
 		}
 	forestLifted.clear();
+	// what forestStill would otherwise look at per tree, by the trees it concerns: selected
+	// (highlighted: not in the forest) and hidden under a building being placed, now or last frame
+	auto mark = [&](uint32_t id) {
+		if (ClientGameObject* o = client->findObject(id))
+			o->forestDirty = true;
+	};
+	for (uint32_t id : forestMarked)
+		mark(id);
+	forestMarked.clear();
+	for (const CliGORef& ref : selection)
+		if (ClientGameObject* o = ref.get()) {
+			o->forestDirty = true;
+			forestMarked.push_back(o->id);
+		}
+	for (uint32_t id : stampdownHidden) {
+		mark(id);
+		forestMarked.push_back(id);
+	}
+	{
+		uint32_t period = 1;
+		while (period < forest.trees.size() / 1024 + 1)
+			period <<= 1;
+		forestDueMask = period - 1;
+		forestDuePhase = (uint32_t)forestFrame & forestDueMask;
+	}
+	// a colour changed (a player's): every tree looked at again
+	forestAllDue = forestEpochSeen != client->forestEpoch;
+	forestEpochSeen = client->forestEpoch;
 	if (forestWorkedOf != client->gameSet.get()) {
 		forestWorkedOf = client->gameSet.get();
 		forestWorkedItem = client->gameSet ? client->gameSet->items.names.getIndex("I'm Being Worked at") : -1;
@@ -4151,9 +4300,9 @@ void ClientInterface::forestEnd()
 		printf("Forest: %zu trees\n", trees);
 		reported = trees;
 	}
-	// the trees not visited this frame are gone
+	// the trees not visited this frame are gone (not Extend map's: drawExtendedTrees keeps those)
 	for (uint32_t slot = 0; slot < (uint32_t)forest.trees.size(); slot++)
-		if (forestOwner[slot] != 0 && forestSeen[slot] != forestFrame) {
+		if (forestOwner[slot] != 0 && forestOwner[slot] < EXT_TREE_ID_BASE && forestSeen[slot] != forestFrame) {
 			forest.trees[slot].hidden = true;
 			forest.trees[slot].lifted = false;
 			forest.markChanged(slot);
@@ -6203,6 +6352,11 @@ void ClientInterface::iter()
 			if (!found)
 				search(client->getLevel(), search);
 			if (found) {
+				static uint32_t targetLogged = 0;
+				if (targetLogged != found->id) {
+					targetLogged = found->id;
+					printf("Benchmark hover target: %s #%u\n", found->blueprint->name.c_str(), found->id);
+				}
 				Camera& cam = client->camera;
 				// "hoverPitch": <radians> looks down that steeply (-1.5: from above, past trees)
 				if (bench.contains("hoverPitch"))
@@ -6287,6 +6441,7 @@ void ClientInterface::iter()
 					drawObject(copy.get(), true);
 		}
 		forestEnd();
+		forestPick();
 		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
 		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
 		// The particle renderer only draws sprites; these were blank squares before.
@@ -6408,6 +6563,17 @@ void ClientInterface::iter()
 			particlesContainer->generate(psCache->getPS(particleTest), at, 0, client->timeManager.previousTime, client->timeManager.currentTime);
 		}
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
+		// test runs with "hover": what the mouse is over, in the log as it changes (the forest's
+		// trees are picked from its grid, forestPick)
+		if (BenchmarkEnabled()) {
+			static const bool logHover = !g_settings.value("benchmark", nlohmann::json::object()).value("hover", std::string()).empty();
+			static uint32_t lastHover = ~0u;
+			const uint32_t now = nextSelectedObject ? nextSelectedObject->id : 0;
+			if (logHover && now != lastHover) {
+				lastHover = now;
+				printf("Benchmark hover: %s #%u\n", nextSelectedObject ? nextSelectedObject->blueprint->name.c_str() : "nothing", now);
+			}
+		}
 		// the help for what is under the cursor (F1, Alt+right-click): what it looks like to this
 		// player, so a disguised spy opens the page of what it pretends to be
 		if (nextSelectedObject && nextSelectedObject->blueprint) {
@@ -7115,14 +7281,73 @@ void ClientInterface::drawExtendedTrees()
 		}
 	}
 	const bool winterLooks = client->environmentActive && client->environmentSettings.seasons;
-	for (size_t i = 0; i < extTreeEntities.size() && i < extTreeLooks.size(); i++) {
+	auto lookOf = [&](size_t i) {
 		SceneEntity& e = extTreeEntities[i];
 		const ExtTreeLook& l = extTreeLooks[i];
 		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
 		e.model = bare ? l.bare : l.snowy && TreeSnowLaden(client, l.id) ? l.snowy : l.leafy;
 		e.transform = bare ? l.bareTransform : l.leafyTransform;
 		e.flags = (bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags) | SceneEntity::SEFLAG_WIND; // (in the wind, Wind.h)
+	};
+	const size_t n = std::min(extTreeEntities.size(), extTreeLooks.size());
+	// With the forest (gfx/Forest.h): each tree a slot of it, kept as long as the forest, the GPU
+	// culling and drawing them in every pass with the map's own trees. They were scene entities,
+	// all of them gone through by every pass every frame: tens of thousands around the large
+	// maps (Great Britain's), most of the frame's CPU time. Their looks (the seasons, the snow)
+	// worked out again a share at a time, as the map's trees' (forestStill).
+	if (forestOn && n > 0 && n < EXT_TREE_ID_LIMIT) {
+		if (extForestGen != forestGen || extForestFor != extTreesFor || extForestModels != extTreesModels) {
+			// (the old slots freed: a new list of trees in the same forest)
+			if (extForestGen == forestGen)
+				for (uint32_t slot : extForestSlots)
+					if (slot < forest.trees.size() && forestOwner[slot] >= EXT_TREE_ID_BASE) {
+						forest.trees[slot].hidden = true;
+						forest.markChanged(slot);
+						forestOwner[slot] = 0;
+						forestFree.push_back(slot);
+					}
+			extForestSlots.clear();
+			extForestGen = forestGen;
+			extForestFor = extTreesFor;
+			extForestModels = extTreesModels;
+		}
+		const bool assign = extForestSlots.size() != n;
+		if (assign) {
+			extForestSlots.resize(n);
+			for (size_t i = 0; i < n; i++)
+				extForestSlots[i] = forestAlloc(EXT_TREE_ID_BASE + (uint32_t)i);
+			if (!extTreesCounted) {
+				printf("Extend map: %zu trees in the forest\n", n);
+				extTreesCounted = true;
+			}
+		}
+		const size_t period = assign ? 1 : n / 1024 + 1;
+		for (size_t i = assign ? 0 : (size_t)(forestFrame % period); i < n; i += period) {
+			lookOf(i);
+			const SceneEntity& e = extTreeEntities[i];
+			if (!e.model || e.model != e.model->getStaticModel())
+				continue;
+			const Matrix& m = e.transform;
+			const float s = std::sqrt(m._11 * m._11 + m._12 * m._12 + m._13 * m._13);
+			ForestTree t;
+			t.model = e.model;
+			t.transform = e.transform;
+			t.centre = e.model->getSphereCenter().transform(e.transform);
+			t.radius = e.model->getSphereRadius() * s;
+			t.flags = e.flags;
+			t.color = 0;
+			t.hidden = false;
+			ForestTree& cur = forest.trees[extForestSlots[i]];
+			if (cur.hidden || cur.model != t.model || cur.flags != t.flags || memcmp(&cur.transform, &t.transform, sizeof(Matrix)) != 0) {
+				cur = t;
+				forest.markChanged(extForestSlots[i]);
+			}
+		}
+		return;
 	}
+	extForestSlots.clear();
+	for (size_t i = 0; i < n; i++)
+		lookOf(i);
 	const Vector3 cam = client->camera.position;
 	const Vector3 dir = client->camera.direction;
 	const float far2 = client->camera.farDist * client->camera.farDist;

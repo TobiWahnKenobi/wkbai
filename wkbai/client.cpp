@@ -70,7 +70,10 @@ void Client::tick()
 		std::erase_if(minimapAlerts, [now](const MinimapAlert& a) { return now - a.start > (uint32_t)(a.seconds * 1000.0f); });
 	}
 
-	const auto walkObj = [this](ClientGameObject *obj, auto &rec) -> void {
+	// the objects that move, fly, lie on the ground or sound from their animations (tickActive):
+	// not every object of the level (with 20,000 trees on the Great Britain maps the walk was
+	// a share of every frame)
+	const auto stepObj = [this](ClientGameObject *obj) -> void {
 		if (obj->movement.isMoving()) {
 			Vector3 newPosition = obj->movement.getNewPosition(timeManager.currentTime);
 			newPosition.y = terrain->getHeightEx(newPosition.x, newPosition.z, obj->blueprint->canWalkOnWater());
@@ -129,12 +132,24 @@ void Client::tick()
 			obj->updatePosition(obj->trajectory.getPosition(timeManager.currentTime));
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);
 		}
-		for (auto &it : obj->children)
-			for (CommonGameObject *obj : it.second)
-				rec((ClientGameObject*)obj, rec);
 	};
-	if(getLevel())
-		walkObj(getLevel(), walkObj);
+	if (getLevel()) {
+		size_t kept = 0;
+		for (size_t i = 0; i < tickActive.size(); i++) {
+			const uint32_t id = tickActive[i];
+			ClientGameObject* obj = findObject(id);
+			bool keep = false;
+			if (obj) {
+				stepObj(obj);
+				keep = obj->movement.isMoving() || obj->trajectory.isMoving() || needsTick(obj->blueprint);
+			}
+			if (keep)
+				tickActive[kept++] = id;
+			else
+				tickActiveIds.erase(id);
+		}
+		tickActive.resize(kept);
+	}
 
 	// Camera paths
 	auto resetCameraMode = [this](bool skipActions = false) {
@@ -297,6 +312,8 @@ void Client::tick()
 				ClientGameObject *obj = createObject(blueprint, objid);
 				obj->subtype = subtype;
 				obj->appearance = appear;
+				if (needsTick(blueprint))
+					tickMark(obj);
 				if (blueprint->bpClass == Tags::GAMEOBJCLASS_LEVEL)
 					level = obj;
 				// a tree that comes into being out of the player's sight: unknown to it until seen
@@ -313,8 +330,10 @@ void Client::tick()
 				if (!obj) printf("CLI-WARN: Obj %i from message does not exist\n", objid);
 				if (obj && treeMemory)
 					treeMemory->beforeTreeChange(this, obj);
-				if (obj)
+				if (obj) {
 					obj->items[index] = value;
+					obj->forestDirty = true;
+				}
 				break;
 			}
 			case NETCLIMSG_OBJECT_PARENT_SET: {
@@ -327,6 +346,7 @@ void Client::tick()
 					vec.erase(std::remove(vec.begin(), vec.end(), obj), vec.end()); // is order important?
 				}
 				obj->parent = newParent;
+				obj->forestDirty = true;
 				if (newParent)
 					newParent->children[obj->blueprint].push_back(obj);
 				break;
@@ -375,6 +395,7 @@ void Client::tick()
 					if (treeMemory)
 						treeMemory->beforeTreeChange(this, obj);
 					obj->orientation = ori;
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -387,6 +408,7 @@ void Client::tick()
 						treeMemory->beforeTreeChange(this, obj);
 					obj->subtype = subtype;
 					obj->appearance = appear;
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -396,6 +418,8 @@ void Client::tick()
 				info("Object %u changed its color to %u\n", objid, color);
 				if (ClientGameObject *obj = findObject(objid)) {
 					obj->color = color;
+					obj->forestDirty = true;
+					forestEpoch++; // (a player's: its trees' colour)
 				}
 				break;
 			}
@@ -417,6 +441,7 @@ void Client::tick()
 					obj->animClamped = br.readUint8();
 					obj->animSynchronizedTask = br.readUint32();
 					obj->animSpeed = br.readFloat();
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -428,6 +453,8 @@ void Client::tick()
 				float speed = br.readFloat();
 				if (ClientGameObject *obj = findObject(objid)) {
 					obj->movement.startMovement(src, dst, startTime, speed);
+					obj->forestDirty = true;
+					tickMark(obj);
 				}
 				break;
 			}
@@ -435,6 +462,7 @@ void Client::tick()
 				uint32_t objid = br.readUint32();
 				if (ClientGameObject *obj = findObject(objid)) {
 					obj->movement.stopMovement();
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -471,6 +499,9 @@ void Client::tick()
 					// now converted!
 					const GameObjBlueprint* prevbp = obj->blueprint;
 					obj->blueprint = postbp;
+					obj->forestDirty = true;
+					if (needsTick(postbp))
+						tickMark(obj);
 					// the footprint: the old one freed, the new one taken (as the server's)
 					updateOccupiedTiles(obj, obj->position, obj->orientation, obj->position, obj->orientation, prevbp);
 					// something else turned into a tree out of sight: unknown until seen
@@ -640,8 +671,10 @@ void Client::tick()
 			case NETCLIMSG_SHADOW_SWITCH: {
 				const uint32_t objid = br.readUint32();
 				const bool on = br.readUint8() != 0;
-				if (ClientGameObject* obj = findObject(objid))
+				if (ClientGameObject* obj = findObject(objid)) {
 					obj->shadowSwitch = on ? 1 : 0;
+					obj->forestDirty = true;
+				}
 				break;
 			}
 			case NETCLIMSG_FOG_RESET: {
@@ -713,6 +746,7 @@ void Client::tick()
 					if (treeMemory)
 						treeMemory->beforeTreeChange(this, obj);
 					obj->scale = scale;
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -759,6 +793,7 @@ void Client::tick()
 					if (treeMemory && obj->flags != flags)
 						treeMemory->beforeTreeChange(this, obj);
 					obj->flags = flags;
+					obj->forestDirty = true;
 				}
 				break;
 			}
@@ -845,6 +880,8 @@ void Client::tick()
 				br.readTo(objid, initPos, initVel, startTime);
 				ClientGameObject* obj = findObject(objid);
 				obj->trajectory.start(initPos, initVel, startTime);
+				obj->forestDirty = true;
+				tickMark(obj);
 				break;
 			}
 			case NETCLIMSG_GAME_SPEED_CHANGED: {
@@ -1656,10 +1693,16 @@ ClientGameObject * Client::createObject(const GameObjBlueprint * blueprint, uint
 	return obj;
 }
 
+bool Client::needsTick(const GameObjBlueprint* bp)
+{
+	return bp && (bp->perpendicularToLandscape || !bp->soundFromAnimations.empty());
+}
+
 void ClientGameObject::updatePosition(const Vector3& newposition)
 {
 	// TODO: Generalize with server equivalent instead of duplicating code
 	Client* prog = Client::instance;
+	forestDirty = true;
 	Vector3 oldposition = position;
 	position = newposition;
 	if (prog->tiles) {

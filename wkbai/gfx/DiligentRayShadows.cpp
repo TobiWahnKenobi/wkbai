@@ -1262,13 +1262,14 @@ void DiligentRayShadows::setForest(IDeviceContext* ctx, const Forest* forest, bo
 		const bool gone = !t.model || (t.hidden && !t.lifted);
 		if (gone)
 			continue;
+		// (no shadow: no structure looked up, Extend map's tens of thousands of trees)
+		if (!(t.flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+			continue;
 		IBottomLevelAS* b = blasOf(t);
 		if (!b) {
 			stillMissing++;
 			continue;
 		}
-		if (!(t.flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
-			continue;
 		blasOfSlot[i] = b;
 		any = any ? any : b;
 		stillCasters++;
@@ -1325,6 +1326,16 @@ void DiligentRayShadows::setForest(IDeviceContext* ctx, const Forest* forest, bo
 				for (int c = 0; c < 3; c++)
 					d.Transform.data[r][c] = m.m[c][r];
 				d.Transform.data[r][3] = m.m[3][r];
+			}
+		}
+		else {
+			// a slot without a shadow: masked out, and shrunk to a point far below the world.
+			// (At the identity it had the terrain's box, the whole map: with Extend map's 57,000
+			// trees in the forest every shadow ray went through 57,000 of them, 900 ms a frame.)
+			for (int r = 0; r < 3; r++) {
+				for (int c = 0; c < 3; c++)
+					d.Transform.data[r][c] = 0.0f;
+				d.Transform.data[r][3] = -100000.0f;
 			}
 		}
 		d.Mask = b ? 0x01 : 0x00;

@@ -248,6 +248,7 @@ void FogOfWar::beforeTreeChange(Client* client, ClientGameObject* obj)
 	if (!isTree(client, obj) || isSeen(obj->position))
 		return;
 	copyLook(client, obj, treeGhosts[obj->id]);
+	obj->forestDirty = true; // (out of the forest: drawn as remembered, ClientInterface::forestStill)
 	treesDirty = true;
 }
 
@@ -260,6 +261,7 @@ void FogOfWar::treeCreated(Client* client, ClientGameObject* obj)
 		return;
 	// (its position comes with the next message: the next update shows it if it is in sight)
 	treeUnknown.insert(obj->id);
+	obj->forestDirty = true;
 	treesDirty = true;
 }
 
@@ -350,8 +352,10 @@ void FogOfWar::loadTreeMemory(Client* client, const std::string& text)
 		uint32_t id = 0;
 		if (line.rfind("unknown ", 0) == 0) {
 			id = (uint32_t)std::strtoul(line.c_str() + 8, nullptr, 10);
-			if (client->findObject(id))
+			if (ClientGameObject* live = client->findObject(id)) {
 				treeUnknown.insert(id);
+				live->forestDirty = true;
+			}
 			continue;
 		}
 		if (line.rfind("ghost ", 0) != 0)
@@ -386,6 +390,8 @@ void FogOfWar::loadTreeMemory(Client* client, const std::string& text)
 		copy->sceneEntity.animTime = frame;
 		copy->flags = CommonGameObject::fRenderable;
 		treeGhosts[id] = std::move(copy);
+		if (ClientGameObject* live = client->findObject(id))
+			live->forestDirty = true;
 	}
 }
 
