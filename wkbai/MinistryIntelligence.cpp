@@ -303,7 +303,7 @@ namespace {
 				int n = 0;
 				float power = 0.0f;
 				int cls = -1;
-				const int region = myPalace && !(MinOff() & 524288) ? Naval::HomeLandRegion(me, &cls) : -1;
+				const int region = myPalace && !(MinOff() & 2097152) ? Naval::HomeLandRegion(me, &cls) : -1;
 				bool shared = region < 0;
 				for (ServerGameObject* p : enemies)
 					if (ServerGameObject* palace = AIUtil::Palace(p); palace && !shared)
