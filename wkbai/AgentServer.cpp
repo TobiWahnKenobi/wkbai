@@ -324,6 +324,22 @@ namespace {
 			g_windowQuit = true;
 			return;
 		}
+		// live map authoring (ClientInterface::authorOp): answered at once, the change made on the
+		// game's terrain and objects (one undo step each); author.quit closes the game
+		if (op.rfind("author.", 0) == 0) {
+			if (op == "author.quit") {
+				out["ok"] = true;
+				reply(out, fromScript, line);
+				g_windowQuit = true;
+				return;
+			}
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->author) { fail("no game on the screen"); return; }
+			nlohmann::json r = w->author(req);
+			r["id"] = out["id"];
+			reply(r, fromScript, line);
+			return;
+		}
 		if (op == "screenshot") {
 			std::string name = req.value("name", std::string("screenshot"));
 			if (name.empty() || name.size() > 60 || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos) {

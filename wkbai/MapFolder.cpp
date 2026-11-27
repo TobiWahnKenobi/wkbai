@@ -4,6 +4,7 @@
 #include "MapAuthoring.h"
 #include "MapTerrain.h"
 #include "MapMaterials.h"
+#include "MapChecks.h"
 #include "terrain.h"
 #include "server.h"
 #include "file.h"
@@ -2951,7 +2952,8 @@ int RunCommandLine(const std::vector<std::string>& args)
 			"       wkbai --author catalog [--mod <name>|none] [--gameset <file>] [--edges] [--out <file.json>]\n"
 			"       wkbai --author describe <folder.wkbai | level> [--mod <name>|none] [--png <file.png>] [--out <file.json>]\n"
 			"       wkbai --author terrain|terrain-stats|heightmap|elevation|elevation-tiles ... (MapTerrain.h)\n"
-			"       wkbai --author materials <folder.wkbai> [--out <file.json>] [--png <file.png>] | material-presets (MapMaterials.h)\n");
+			"       wkbai --author materials <folder.wkbai> [--out <file.json>] [--png <file.png>] | material-presets (MapMaterials.h)\n"
+			"       wkbai --author check <folder.wkbai | level> [--out <file.json>] [--png <file.png>] | preview <map> --dir <folder> (MapChecks.h)\n");
 		return 2;
 	}
 	// what can go on a map, and an existing map in numbers and a picture (MapAuthoring.h)
@@ -2966,6 +2968,9 @@ int RunCommandLine(const std::vector<std::string>& args)
 	// the ground: materials by rule and the edge-rule solver (MapMaterials.h)
 	if (args[0] == "materials" || args[0] == "material-presets")
 		return MapMaterials::RunCommandLine(args);
+	// every check in one report, and the previews (MapChecks.h, step 17.8)
+	if (args[0] == "check" || args[0] == "preview")
+		return MapChecks::RunCommandLine(args);
 	LoadBCP("data.bcp");
 	Result r;
 	if (args[0] == "import") {

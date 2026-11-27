@@ -51,7 +51,11 @@ void InitWindow()
 #endif
 	SDL_SetMainReady();
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-	auto flags = SDL_WINDOW_RESIZABLE;
+	SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+	// "hiddenWindow": true: the window is never shown (an agent's in-game previews and live
+	// authoring runs, map-authoring step 17.8: drawn and screenshotted, nothing on the screen)
+	if (g_settings.value("hiddenWindow", false))
+		flags |= SDL_WINDOW_HIDDEN;
 	// Initial size of the window's drawing area (the render resolution)
 	g_windowWidth = g_settings.value<int>("windowWidth", g_windowWidth);
 	g_windowHeight = g_settings.value<int>("windowHeight", g_windowHeight);

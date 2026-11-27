@@ -15699,6 +15699,8 @@ void Test_MapWaterObjects();
 void Test_MapWater();
 
 void Test_MapObjects();
+// Map checks, previews and live author ops (map authoring 17.8): MapChecksTest.cpp
+void Test_MapChecks();
 void Test_GeneratedTransitions();
 
 // Artillery breaks the ice (ServerEnvironment::iceStruck, the game setting "breakingIce"): on
@@ -16218,6 +16220,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapWater, "Water by intent: the water design's version 2 (speeds per point, far-land hints), a river with a gorge and a fall (its designed current in the renderer and the gameplay), a lake that holds, one that leaks, a puddle, rivers that rise and run dry, a sea on two winds, Extend map following its hints, compiled"},
 {Test_CartDriver, "Cart driver (Mechanics\\Cart Death.cpp): a cart beaten below a quarter of its hit points loses its rider, a riderless cart for the map's nameless player (1026) keeps its load, and another player's peasant takes it over (Take Cart): that player's cart at full hit points, the peasant its driver"},
 {Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by habitat (patches, a tree budget), the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
+{Test_MapChecks, "Map checks: a deliberately broken map (an unreachable start, land no unit reaches with gold on it, a house over a cliff, a puddle, a seam, unfair gold, a player with no base) with every fault reported by one check pass with its place and a fix; the same map without the faults clean; a paint mends the seam; previews and cameras above ground; 4 Peaks checked"},
 };
 
 void LaunchTest()

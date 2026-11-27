@@ -20,6 +20,10 @@ struct IRenderer;
 //   [button] [steps]; key key ("P", "Left Ctrl") down (bool); tap key ("Ctrl+3", a KeyChord);
 //   text text; wheel clicks; wait frames; screenshot [name] (the next frame drawn, as the
 //   player sees it, into <user folder>\agent\<name>.bmp: the reply has its path)
+// Live map authoring (step 17.8; ClientInterface::authorOp, interface/MapEditor.cpp): author.heights,
+// author.paint, author.water, author.place / remove / move, author.check, author.save, author.undo /
+// redo, author.view (the camera), author.state, author.quit; where cheats work (the map editor,
+// single player with cheat mode, test runs)
 // Scripts: "agentControl": { "script": "<file>" } runs a file of such lines (no hello) one after
 // the other, each once the one before is done, printing "AGENT script <line>: <reply>"; scripts
 // also have "sleep" ms (wall clock) and "harness.quit" (closes the game).

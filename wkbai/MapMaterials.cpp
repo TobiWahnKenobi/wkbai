@@ -2171,6 +2171,184 @@ json EdgeFitOf(const Terrain& t, const std::string& dbFile)
 		{ "cornerAgreeShare", cornerPairs ? (double)cornerAgree / cornerPairs : 0.0 }, { "edgeRules", L.ruleCount }, { "groups", L.groups.size() } };
 }
 
+namespace {
+	// the solver's library of a terrain's texture database, built once per database (its
+	// pictures' pointers are the terrain's own: client and server each have theirs)
+	const Library& LibraryOf(const Terrain& t, const std::string& dbFile)
+	{
+		static std::map<std::pair<const void*, std::string>, std::unique_ptr<Library>> cache;
+		auto& slot = cache[{ &t.texDb, dbFile }];
+		if (!slot)
+			slot = std::make_unique<Library>(BuildLibrary(t.texDb, ReadEdgeRules(dbFile)));
+		return *slot;
+	}
+	Placed PlacedOf(const TerrainTile& tile)
+	{
+		return Placed{ tile.texture, (uint8_t)OR().ofCode[(tile.rot & 3) | (tile.xflip & 1) << 2 | (tile.zflip & 1) << 3] };
+	}
+	// per vertex the ground group its tiles' corners give (the commonest; -1 unknown)
+	std::vector<int> VertexGroups(const Terrain& t, const Library& L)
+	{
+		const int W = t.width, H = t.height, gw = W + 1;
+		std::vector<std::array<int16_t, 4>> votes((size_t)gw * (H + 1));
+		for (auto& v : votes) v.fill(-1);
+		auto vote = [&](size_t v, int g) {
+			if (g < 0) return;
+			for (int16_t& s : votes[v]) if (s < 0) { s = (int16_t)g; return; }
+		};
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				const std::array<int, 4> c = L.worldCorners(PlacedOf(t.tiles[(size_t)z * W + x]));
+				const size_t vi[4] = { (size_t)z * gw + x, (size_t)z * gw + x + 1, (size_t)(z + 1) * gw + x + 1, (size_t)(z + 1) * gw + x };
+				for (int k = 0; k < 4; k++) vote(vi[k], c[k]);
+			}
+		std::vector<int> out(votes.size(), -1);
+		for (size_t v = 0; v < votes.size(); v++) {
+			int best = -1, bestN = 0;
+			for (int16_t a : votes[v]) {
+				if (a < 0) continue;
+				int n = 0;
+				for (int16_t b : votes[v]) n += a == b;
+				if (n > bestN) { bestN = n; best = a; }
+			}
+			out[v] = best;
+		}
+		return out;
+	}
+}
+
+json EdgeFaults(const Terrain& t, const std::string& dbFile, int limit)
+{
+	const Library& L = LibraryOf(t, dbFile);
+	const int W = t.width, H = t.height, E = t.edge;
+	json list = json::array();
+	int count = 0;
+	std::map<std::string, int> byPair;
+	const int S[2][2][2] = { { { 1, 0 }, { 2, 3 } }, { { 2, 1 }, { 3, 0 } } };
+	for (int z = E; z < H - E; z++)
+		for (int x = E; x < W - E; x++) {
+			const Placed a = PlacedOf(t.tiles[(size_t)z * W + x]);
+			const std::array<int, 4> ca = L.worldCorners(a);
+			for (int w : { 0, 1 }) {
+				const int nx = x + DX[w], nz = z + DZ[w];
+				if (nx >= W - E || nz >= H - E) continue;
+				const Placed b = PlacedOf(t.tiles[(size_t)nz * W + nx]);
+				const std::array<int, 4> cb = L.worldCorners(b);
+				int bad = 0, ga = -1, gb = -1;
+				for (int k = 0; k < 2; k++) {
+					const int p = ca[S[w][k][0]], q = cb[S[w][k][1]];
+					if (p >= 0 && q >= 0 && p != q) { bad++; ga = p; gb = q; }
+				}
+				// two grounds meet with no transition: the shared corners disagree and no EDGE rule
+				// lets the two pictures touch
+				if (!bad || L.fit(a, w, b)) continue;
+				count++;
+				const std::string pair = L.groups[std::min(ga, gb)] + " | " + L.groups[std::max(ga, gb)];
+				byPair[pair]++;
+				if ((int)list.size() < limit) {
+					const int via = (size_t)ga < L.next.size() ? L.next[ga][gb] : -1;
+					list.push_back({ { "tile", { x, z } }, { "atM", { (x - E) * 5.0f + 2.5f + DX[w] * 2.5f, (z - E) * 5.0f + 2.5f + DZ[w] * 2.5f } },
+						{ "side", SIDE_NAMES[w] }, { "groups", pair }, { "bridge", via >= 0 && via != gb ? json(L.groups[via]) : json(nullptr) } });
+				}
+			}
+		}
+	json pairs = json::array();
+	for (const auto& [k, n] : byPair) pairs.push_back({ { "groups", k }, { "edges", n } });
+	return { { "count", count }, { "list", list }, { "byGroups", pairs },
+		{ "about", "edges between two playable tiles whose shared corners are different grounds with no EDGE rule letting the two pictures touch: a seam, two grounds meeting with no transition tile. tile counts from the whole map's south-west corner; atM is the edge's middle in playable metres" } };
+}
+
+bool PaintRegion(Terrain& t, const std::string& dbFile, const std::string& group, const std::vector<uint8_t>& mark, uint32_t seed, json& report, std::string& error)
+{
+	const Library& L = LibraryOf(t, dbFile);
+	auto gi = L.groupIndex.find(group);
+	if (gi == L.groupIndex.end() || L.pure[gi->second].empty()) {
+		error = "no ground group " + group + " with pictures of its own (a base group such as GRASS1, not a transition)";
+		return false;
+	}
+	const int g = gi->second;
+	const int W = t.width, H = t.height, gw = W + 1, E = t.edge;
+	if (mark.size() != (size_t)W * H) {
+		error = "the region's tiles don't match the map";
+		return false;
+	}
+	std::vector<int> vg = VertexGroups(t, L);
+	std::vector<uint8_t> vset(vg.size(), 0);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++)
+			if (mark[(size_t)z * W + x])
+				for (size_t v : { (size_t)z * gw + x, (size_t)z * gw + x + 1, (size_t)(z + 1) * gw + x + 1, (size_t)(z + 1) * gw + x })
+					vg[v] = g, vset[v] = 1;
+	// the tiles to place: the region and the ring whose corners it changed
+	std::vector<size_t> todo;
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			const size_t ti = (size_t)z * W + x;
+			const size_t vi[4] = { (size_t)z * gw + x, (size_t)z * gw + x + 1, (size_t)(z + 1) * gw + x + 1, (size_t)(z + 1) * gw + x };
+			if (mark[ti] || vset[vi[0]] || vset[vi[1]] || vset[vi[2]] || vset[vi[3]])
+				todo.push_back(ti);
+		}
+	std::vector<Placed> cur((size_t)W * H);
+	for (size_t i = 0; i < cur.size(); i++) cur[i] = PlacedOf(t.tiles[i]);
+	json unjoined = json::array();
+	int painted = 0, ring = 0, noJoin = 0;
+	uint32_t h = seed * 2654435761u + 0x9e3779b9u;
+	auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+	for (size_t ti : todo) {
+		const int x = (int)(ti % W), z = (int)(ti / W);
+		const size_t vi[4] = { (size_t)z * gw + x, (size_t)z * gw + x + 1, (size_t)(z + 1) * gw + x + 1, (size_t)(z + 1) * gw + x };
+		std::array<int, 4> c;
+		for (int k = 0; k < 4; k++) c[k] = vg[vi[k]] < 0 ? g : vg[vi[k]];
+		const int a = *std::min_element(c.begin(), c.end()), b = *std::max_element(c.begin(), c.end());
+		const std::vector<Placed>* cand = nullptr;
+		if (a == b && !L.pure[a].empty()) cand = &L.pure[a];
+		else if (auto f3 = L.fits3.find(c); f3 != L.fits3.end()) cand = &f3->second;
+		else if (auto f = L.fits.find({ a, b }); f != L.fits.end()) {
+			bool two = true;
+			int bits = 0;
+			for (int k = 0; k < 4; k++) { two = two && (c[k] == a || c[k] == b); if (c[k] == b) bits |= 1 << k; }
+			if (two && !f->second[bits].empty()) cand = &f->second[bits];
+		}
+		if (!cand || cand->empty()) {
+			// no picture joins these grounds: the tile keeps its picture (reported, with the group
+			// that bridges them)
+			noJoin++;
+			if (unjoined.size() < 200) {
+				const int other = a == g ? b : a;
+				const int via = (size_t)g < L.next.size() ? L.next[g][other] : -1;
+				unjoined.push_back({ { "tile", { x, z } }, { "atM", { (x - E) * 5.0f + 2.5f, (z - E) * 5.0f + 2.5f } },
+					{ "groups", L.groups[a] + " | " + L.groups[b] }, { "bridge", via >= 0 && via != other ? json(L.groups[via]) : json(nullptr) } });
+			}
+			continue;
+		}
+		// the picture whose sides fit the neighbours best (the EDGE rules), a random one of those
+		int bestN = 99;
+		std::vector<size_t> best;
+		for (size_t k = 0; k < cand->size(); k++) {
+			int n = 0;
+			for (int w = 0; w < 4; w++) {
+				const int nx = x + DX[w], nz = z + DZ[w];
+				if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+				const Placed& q = cur[(size_t)nz * W + nx];
+				if (q.tex) n += !L.fit((*cand)[k], w, q);
+			}
+			if (n < bestN) { bestN = n; best.clear(); }
+			if (n == bestN) best.push_back(k);
+		}
+		cur[ti] = (*cand)[best[rnd() % best.size()]];
+		TerrainTile& tile = t.tiles[ti];
+		const int code = OR().code[cur[ti].orient];
+		tile.texture = cur[ti].tex;
+		tile.rot = code & 3;
+		tile.xflip = (code >> 2) & 1;
+		tile.zflip = (code >> 3) & 1;
+		(mark[ti] ? painted : ring)++;
+	}
+	t.revision++;
+	report = { { "group", group }, { "tiles", painted }, { "ringTiles", ring }, { "unjoined", noJoin }, { "unjoinedList", unjoined } };
+	return true;
+}
+
 int RunCommandLine(const std::vector<std::string>& args)
 {
 	LoadBCP("data.bcp");
