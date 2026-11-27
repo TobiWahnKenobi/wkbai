@@ -5,6 +5,8 @@
 #include "Ministries.h"
 
 #include <cstdlib>
+struct GameSet;
+struct GameObjBlueprint;
 namespace Ministry {
 	// (experiments: parts switched off by WKB_MINOFF bits)
 	inline int MinOff() { static const int v = getenv("WKB_MINOFF") ? atoi(getenv("WKB_MINOFF")) : 0; return v; }
@@ -38,6 +40,10 @@ namespace Ministry {
 				return true;
 		return false;
 	}
+	// a unit type's role (MinistryTactics.cpp, RoleOf): the line (classes 1-4), supports (priests,
+	// monks, druids, succubi), engines, monsters, saboteurs (spies); none for the rest
+	enum UnitRoleKind { ROLE_NONE, ROLE_LINE, ROLE_SUPPORT, ROLE_ENGINE, ROLE_MONSTER, ROLE_SABOTEUR, ROLE_COUNT };
+	int UnitRole(const GameSet* gs, const GameObjBlueprint* type);
 	std::unique_ptr<Department> MakeEconomy();
 	std::unique_ptr<Department> MakeLabour();
 	std::unique_ptr<Department> MakeIntelligence();   // MinistryIntelligence.cpp

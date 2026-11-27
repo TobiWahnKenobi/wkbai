@@ -3546,6 +3546,61 @@ void Test_AIvsAI()
 		return;
 	}
 
+	// WKB_DUMP_UNITS=1: the game set's units (for the ministry AI's unit roles): each building's
+	// "Spawn" commands with their impossible conditions, each character's class, costs, fighting
+	// numbers and commands, and each player's "Can Spawn" items at the start
+	if (getenv("WKB_DUMP_UNITS")) {
+		const GameSet* gs = server.gameSet.get();
+		auto item = [&](const GameObjBlueprint& t, const char* n) { const int i = gs->items.names.getIndex(n); return i >= 0 ? t.getStartingItemValue(i) : 0.0f; };
+		for (size_t i = 0; i < gs->objBlueprints[Tags::GAMEOBJCLASS_BUILDING].size(); i++) {
+			const GameObjBlueprint& b = gs->objBlueprints[Tags::GAMEOBJCLASS_BUILDING][i];
+			std::string line;
+			for (const Command* cmd : b.offeredCommands) {
+				const std::string& n = gs->commands.getString(cmd);
+				if (n.rfind("Spawn ", 0) != 0 && n.rfind("Summon ", 0) != 0 && n.rfind("Train ", 0) != 0 && n.rfind("Raise ", 0) != 0 && n.rfind("Research ", 0) != 0
+					&& n.find("Upgrade") == std::string::npos && n.find("Rocket") == std::string::npos)
+					continue;
+				line += " | " + n + " [";
+				for (const GSCondition* c : cmd->conditionsImpossible)
+					line += gs->conditions.getString(c) + ";";
+				line += "]";
+			}
+			if (!line.empty() || b.name.find("Tower") != std::string::npos)
+				printf("UNITS building \"%s\":%s\n", b.name.c_str(), line.c_str());
+		}
+		for (size_t i = 0; i < gs->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].size(); i++) {
+			const GameObjBlueprint& t = gs->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][i];
+			std::string cmds;
+			for (const Command* cmd : t.offeredCommands)
+				cmds += gs->commands.getString(cmd) + ";";
+			if (t.name == "Peasant")
+				for (const Command* cmd : t.offeredCommands)
+					if (const std::string& n = gs->commands.getString(cmd); n.rfind("Build ", 0) == 0) {
+						std::string conds;
+						for (const GSCondition* c : cmd->conditionsImpossible)
+							conds += gs->conditions.getString(c) + ";";
+						printf("UNITS build \"%s\" [%s]\n", n.c_str(), conds.c_str());
+					}
+			printf("UNITS character \"%s\": class %.0f cost %.0f/%.0f/%.0f hp %.0f h2h %.0f missile %.0f range %.0f | %s\n", t.name.c_str(),
+				item(t, "I'm A Military Unit"), t.getStartingItemValue(Tags::PDITEM_FOOD_COST), t.getStartingItemValue(Tags::PDITEM_WOOD_COST),
+				t.getStartingItemValue(Tags::PDITEM_GOLD_COST), item(t, "Hit Point Capacity"), item(t, "H2H Damage"), item(t, "Missile Damage"),
+				item(t, "Maximum Missile Range"), cmds.c_str());
+		}
+		ServerGameObject* lvl = server.getLevel();
+		for (const auto& [type, children] : lvl->children)
+			for (CommonGameObject* c : children) {
+				auto* player = (ServerGameObject*)c;
+				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+					continue;
+				std::string can;
+				for (size_t k = 0; k < gs->items.names.size(); k++) {
+					const std::string& n = gs->items.names.getString((int)k);
+					if (n.rfind("Can Spawn ", 0) == 0 && player->getItem((int)k) > 0.0f)
+						can += n.substr(10) + ";";
+				}
+				printf("UNITS player %u \"%s\": %s\n", player->id, player->name.c_str(), can.c_str());
+			}
+	}
 	std::map<uint32_t, std::set<uint32_t>> raised; // per player, every soldier seen at a census
 	std::map<uint32_t, std::set<uint32_t>> siegeRaised; // per player, every siege engine seen at a census
 	auto census = [&](const char* when) {
