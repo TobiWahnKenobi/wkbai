@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../util/GSFileParser.h"
+#include "../util/ItemMap.h"
 //#include "gameset.h"
 #include <map>
 #include <memory>
@@ -54,7 +55,7 @@ struct GameObjBlueprint {
 	std::string name;
 	GameSet *gameSet;
 
-	std::map<int, float> startItemValues;
+	ItemMap startItemValues;
 	// BLUEPRINT_TOOLTIP: the language key of the name the player sees ("TOOLTIP_KNIGHT"; the help's titles)
 	std::string tooltip;
 

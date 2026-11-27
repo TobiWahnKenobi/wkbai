@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cmath>
+#include "util/ItemMap.h"
 #include <cstdint>
 #include <map>
 #include <set>
@@ -42,7 +43,7 @@ struct CommonGameObject {
 	CommonGameObject* parent;
 	std::map<GameObjBlueprintIndex, std::vector<CommonGameObject*>> children;
 
-	std::map<int, float> items;
+	ItemMap items; // (sorted vector: util/ItemMap.h)
 	std::map<std::pair<int, int>, float> indexedItems;
 
 	Vector3 position, orientation, scale = Vector3(1.0f, 1.0f, 1.0f);

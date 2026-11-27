@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "actions.h"
+#include "../util/ScriptProfile.h"
 #include "../terrain.h"
 #include "finder.h"
 #include "../util/GSFileParser.h"
@@ -12,6 +13,7 @@
 #include "../network.h"
 #include "ScriptContext.h"
 #include "../BreakpointManager.h"
+#include "../Order.h"
 #include "../settings.h"
 
 #include <cassert>
@@ -549,8 +551,15 @@ struct ActionRegisterAssociates : Action {
 		auto aors = f_aors->eval(ctx);
 		auto ated = f_ated->eval(ctx);
 		for (ServerGameObject *aor : aors) {
+			if (!reachableOnly) {
+				for (ServerGameObject* obj : ated)
+					aor->associateObject(category, obj);
+				continue;
+			}
+			// (the army's members found once for all the targets: associating changes no member)
+			const ArmyReach reach(aor);
 			for (ServerGameObject *obj : ated)
-				if (!reachableOnly || (!ArmyCannotReach(aor, obj) && !RecentlyGaveUp(aor, obj)))
+				if (!reach.cannotReach(obj) && !RecentlyGaveUp(aor, obj))
 					aor->associateObject(category, obj);
 		}
 	}
@@ -2642,7 +2651,8 @@ bool g_actionProfile = false;
 std::map<std::string, double> g_actionMs;
 
 void ActionSequence::run(SrvScriptContext* ctx) const {
-	const bool hasDebugInfo = debugInfo.get();
+	ScriptMark mark(ScriptMarks::SEQUENCE, this);
+	const bool hasDebugInfo = debugInfo.get() && BreakpointManager::active();
 	extern uint64_t g_scriptWork;
 	g_scriptWork += actionList.size();
 	for (size_t i = 0; i < actionList.size(); ++i) {

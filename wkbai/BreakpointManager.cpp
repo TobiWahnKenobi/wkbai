@@ -1,6 +1,7 @@
 #include "BreakpointManager.h"
 
 std::unique_ptr<BreakpointManager> BreakpointManager::s_instance;
+std::atomic<bool> BreakpointManager::s_active{ false };
 
 BreakpointManager& BreakpointManager::instance()
 {
@@ -15,18 +16,21 @@ void BreakpointManager::setBreakpoint(int fileIndex, int lineNumber)
 {
 	auto lock = std::lock_guard<std::mutex>(m_accessMutex);
 	m_breakpointSet.insert(std::make_pair(fileIndex, lineNumber));
+	updateActive();
 }
 
 void BreakpointManager::removeBreakpoint(int fileIndex, int lineNumber)
 {
 	auto lock = std::lock_guard<std::mutex>(m_accessMutex);
 	m_breakpointSet.erase(std::make_pair(fileIndex, lineNumber));
+	updateActive();
 }
 
 void BreakpointManager::clearAllBreakpoints()
 {
 	auto lock = std::lock_guard<std::mutex>(m_accessMutex);
 	m_breakpointSet.clear();
+	updateActive();
 }
 
 bool BreakpointManager::isBreakpointSet(int fileIndex, int lineNumber)
@@ -57,6 +61,7 @@ void BreakpointManager::resumeFromBreak()
 	auto lock = std::lock_guard<std::mutex>(m_accessMutex);
 	m_pleaseUnbreak = true;
 	m_stepOnNextAction = false;
+	updateActive();
 	m_breakCondVar.notify_all();
 }
 
@@ -65,6 +70,7 @@ void BreakpointManager::stepInto()
 	auto lock = std::lock_guard<std::mutex>(m_accessMutex);
 	m_pleaseUnbreak = true;
 	m_stepOnNextAction = true;
+	updateActive();
 	m_breakCondVar.notify_all();
 }
 

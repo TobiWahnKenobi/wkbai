@@ -24,6 +24,7 @@ char* itoa(int num, char* buffer, int base) {std::to_chars(buffer, buffer+10, nu
 #include <fcntl.h>
 #include <string>
 #include "platform.h"
+#include "util/ScriptProfile.h"
 
 HiddenChild PopenHidden(const char* exePath)
 {
@@ -104,30 +105,48 @@ extern "C" __declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned
 extern "C" __declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int);
 namespace {
 	std::atomic<bool> g_samplerRun{ false };
-	std::thread g_samplerThread;
-	std::vector<std::vector<DWORD64>> g_samples;
+	// (a sampler still running at exit stops: a joinable std::thread destroyed would terminate)
+	struct SamplerThread {
+		std::thread t;
+		~SamplerThread() { g_samplerRun = false; if (t.joinable()) t.join(); }
+		SamplerThread& operator=(std::thread&& o) { t = std::move(o); return *this; }
+		void join() { t.join(); }
+	} g_samplerThread;
+	std::vector<SamplerSample> g_samples;
+	DWORD g_samplerThreadId = 0;
+	// the samples' frames (by the unwind tables; 128 deep: a script's tree nests deep)
+	constexpr int SAMPLER_FRAMES = 128;
 }
-void SamplerStart()
+ScriptMarks g_scriptMarks;
+bool g_scriptMarksOn = false;
+bool ScriptMarksThisThread() { return GetCurrentThreadId() == g_samplerThreadId; }
+const std::vector<SamplerSample>& SamplerSamples() { return g_samples; }
+void SamplerStart(bool scripts)
 {
 	if (g_samplerRun) return;
 	HANDLE target = nullptr;
 	DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &target, THREAD_ALL_ACCESS, FALSE, 0);
 	g_samples.clear();
+	g_samplerThreadId = GetCurrentThreadId();
+	g_scriptMarks.depth = 0;
+	g_scriptMarksOn = scripts;
 	g_samplerRun = true;
 	timeBeginPeriod(1);
-	g_samplerThread = std::thread([target]() {
+	g_samplerThread = std::thread([target, scripts]() {
 		HANDLE process = GetCurrentProcess();
+		extern std::atomic<const char*> g_simPhase;
 		while (g_samplerRun) {
 			Sleep(1);
 			if (SuspendThread(target) == (DWORD)-1) continue;
 			CONTEXT c{};
 			c.ContextFlags = CONTEXT_FULL;
 			// (nothing allocated while it is stopped: it may hold the heap's lock)
-			DWORD64 frames[64];
-			int n = 0;
+			DWORD64 frames[SAMPLER_FRAMES];
+			ScriptMarks::Entry marks[ScriptMarks::MAX];
+			int n = 0, m = 0;
+			const char* phase = nullptr;
 			if (GetThreadContext(target, &c)) {
-				// (frames by the unwind tables)
-				for (; n < 64 && c.Rip; n++) {
+				for (; n < SAMPLER_FRAMES && c.Rip; n++) {
 					frames[n] = c.Rip;
 					DWORD64 base = 0;
 					PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
@@ -135,21 +154,39 @@ void SamplerStart()
 					void* handler = nullptr; DWORD64 frame = 0;
 					RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, f, &c, &handler, &frame, nullptr);
 				}
+				if (scripts) {
+					phase = g_simPhase.load(std::memory_order_relaxed);
+					m = std::min(g_scriptMarks.depth, ScriptMarks::MAX);
+					for (int i = 0; i < m; i++) marks[i] = g_scriptMarks.e[i];
+				}
 			}
 			ResumeThread(target);
-			if (n)
-				g_samples.emplace_back(frames, frames + n);
+			if (n) {
+				SamplerSample s;
+				s.frames.assign(frames, frames + n);
+				s.phase = phase;
+				s.marks.resize(m);
+				for (int i = 0; i < m; i++) s.marks[i] = { marks[i].p, marks[i].kind };
+				g_samples.push_back(std::move(s));
+			}
 		}
 		CloseHandle(target);
 		(void)process;
 	});
 }
-std::string SamplerStop(int top)
+// stops the sampling thread (once)
+void SamplerHalt()
 {
-	if (!g_samplerRun) return {};
+	if (!g_samplerRun) return;
 	g_samplerRun = false;
 	g_samplerThread.join();
+	g_scriptMarksOn = false;
 	timeEndPeriod(1);
+}
+std::string SamplerStop(int top)
+{
+	if (!g_samplerRun && g_samples.empty()) return {};
+	SamplerHalt();
 	HANDLE process = GetCurrentProcess();
 	SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
 	SymInitialize(process, nullptr, TRUE);
@@ -166,7 +203,8 @@ std::string SamplerStop(int top)
 		return names[a] = n;
 	};
 	std::map<std::string, int> incl, excl;
-	for (const auto& st : g_samples) {
+	for (const auto& sample : g_samples) {
+		const auto& st = sample.frames;
 		std::vector<const std::string*> seen;
 		for (size_t i = 0; i < st.size(); i++) {
 			const std::string& n = nameOf(st[i]);
@@ -192,6 +230,12 @@ std::string SamplerStop(int top)
 	return head + list(incl, "on the stack") + list(excl, "on top");
 }
 #else
-void SamplerStart() {}
+ScriptMarks g_scriptMarks;
+bool g_scriptMarksOn = false;
+bool ScriptMarksThisThread() { return false; }
+namespace { std::vector<SamplerSample> g_samples; }
+const std::vector<SamplerSample>& SamplerSamples() { return g_samples; }
+void SamplerStart(bool) {}
+void SamplerHalt() {}
 std::string SamplerStop(int) { return {}; }
 #endif

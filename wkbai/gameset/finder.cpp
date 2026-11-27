@@ -1,4 +1,5 @@
 #include <SDL3/SDL_timer.h>
+#include "../util/ScriptProfile.h"
 #include <map>
 #include <algorithm>
 #include <cstdlib>
@@ -180,6 +181,7 @@ struct FinderResults : ObjectFinder {
 	int ofd;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ofd == -1) return {}; // TODO: Remove this after implementing exception handling
+		ScriptMark mark(ScriptMarks::FINDER, ctx->gameState->gameSet->objectFinderDefinitions[ofd]);
 		extern bool g_actionProfile;
 		if (g_actionProfile && ctx->isServer()) {
 			const uint64_t start = SDL_GetPerformanceCounter();
@@ -200,8 +202,14 @@ struct FinderAssociates : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return ClientAssociations(ctx, category, false);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
-		const auto &set = sctx->getSelf()->associates[category];
+		// (find: operator[] made an empty set, on the heap, for every category asked of an object
+		// that had none; the list sized once)
+		const auto& all = sctx->getSelf()->associates;
+		const auto found = all.find(category);
+		if (found == all.end()) return {};
+		const auto& set = found->second;
 		ObjectFinderResult vec;
+		if (set.size() > 1) vec.reserve(set.size());
 		for (auto& ref : set)
 			if (ref && ref->isInteractable())
 				vec.push_back(ref);
@@ -218,9 +226,12 @@ struct FinderAssociators : ObjectFinder {
 		if (!ctx->isServer()) return ClientAssociations(ctx, category, true);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		ServerGameObject* self = sctx->getSelf();
-		const auto &set = self->associators[category];
+		const auto found0 = self->associators.find(category);
+		if (found0 == self->associators.end()) return {};
+		const auto &set = found0->second;
 		// in the order they registered, as WKB.exe lists them (ServerGameObject::associatorSeq)
 		std::vector<std::pair<uint64_t, ServerGameObject*>> found;
+		found.reserve(set.size());
 		for (auto& ref : set)
 			if (ref && ref->isInteractable()) {
 				auto it = self->associatorSeq.find({ category, ref.objid });
@@ -230,6 +241,7 @@ struct FinderAssociators : ObjectFinder {
 		if (!byId)
 			std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 		ObjectFinderResult vec;
+		vec.reserve(found.size());
 		for (const auto& f : found)
 			vec.push_back(f.second);
 		return vec;
@@ -248,7 +260,7 @@ struct FinderPlayers : ObjectFinder {
 			if (it.first.bpClass() == Tags::GAMEOBJCLASS_PLAYER)
 				for (CommonGameObject *player : it.second)
 					if (auto _ = ctx->change(ctx->candidate, player->dyncast<CommonGameObject>()))
-						if (server->gameSet->equations[equation]->eval(ctx))
+						if (ScriptMark mark(ScriptMarks::VALUE, server->gameSet->equations[equation]); server->gameSet->equations[equation]->eval(ctx))
 							res.push_back(player->dyncast<CommonGameObject>());
 		}
 		return res;
@@ -660,6 +672,7 @@ struct FinderSubordinates : ObjectFinder {
 		if (!objbp || (objbp == obj->blueprint)) {
 			if ((bpclass == -1) || (bpclass == obj->blueprint->bpClass)) {
 				auto _ = ctx->change(ctx->candidate, obj);
+				ScriptMark mark(ScriptMarks::VALUE, equation == -1 ? nullptr : Server::instance->gameSet->equations[equation]);
 				if ((equation == -1) || (Server::instance->gameSet->equations[equation]->eval(ctx) > 0.0f))
 					return true;
 			}
@@ -785,6 +798,7 @@ struct FinderFilterFirst : ObjectFinder {
 		decltype(vec) res;
 		for (CommonGameObject *obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
 			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f) {
 				res.push_back(obj);
 				if (++num >= limit)
@@ -806,14 +820,22 @@ struct FinderFilter : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
 		g_scriptWork += vec.size();
-		decltype(vec) res;
-		for (CommonGameObject *obj : vec) {
+		// (the ones that pass kept in place, in their order: no second list made and freed, the
+		// heap's 2.8% of a 9000-unit battle step, docs/engine/script-profile.md)
+		const size_t n = vec.size();
+		size_t kept = 0;
+		for (size_t i = 0; i < n; i++) {
+			CommonGameObject* obj = vec[i];
 			auto _ = ctx->change(ctx->candidate, obj);
-			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f) {
-				res.push_back(obj);
-			}
+			ScriptMark mark(ScriptMarks::VALUE, ctx->gameState->gameSet->equations[equation]);
+			if (ctx->gameState->gameSet->equations[equation]->eval(ctx) > 0.0f)
+				vec[kept++] = obj;
 		}
-		return res;
+		if (kept == 0)
+			vec.clear();
+		else if (kept < n)
+			vec.resize(kept);
+		return vec;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		equation = gs.equations.readIndex(gsf);
@@ -919,6 +941,7 @@ struct FinderGradeSelect : ObjectFinder {
 		auto vec = finder->eval(ctx);
 		g_scriptWork += vec.size();
 		ValueDeterminer *vd = Server::instance->gameSet->equations[equation];
+		ScriptMark mark(ScriptMarks::VALUE, vd);
 
 		std::vector<std::pair<float,CommonGameObject*>> values(vec.size());
 		bool nan = false;

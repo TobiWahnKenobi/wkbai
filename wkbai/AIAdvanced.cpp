@@ -17,6 +17,7 @@
 //   strength around it) comes home instead of dying, and one whose target fell goes on to the
 //   next building there.
 #include "AIController.h"
+#include "util/ScriptProfile.h"
 #include "AIUtil.h"
 #include "MinistryDepartments.h"
 #include "server.h"
@@ -554,7 +555,7 @@ namespace AIUtil {
 					continue;
 				SrvScriptContext cctx(Server::instance, b);
 				auto _s = cctx.selectedObject.change(b);
-				auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+				auto holds = [&](GSCondition* cond) { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&cctx); };
 				if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
 					|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
 					|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
@@ -681,7 +682,7 @@ int AIController::homeGuard(float now)
 				continue;
 			SrvScriptContext cctx(Server::instance, b);
 			auto _s = cctx.selectedObject.change(b);
-			auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+			auto holds = [&](GSCondition* cond) { ScriptMark mark(ScriptMarks::VALUE, cond->test); return cond->test->booleval(&cctx); };
 			if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
 				|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
 				|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
