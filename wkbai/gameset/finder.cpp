@@ -217,11 +217,21 @@ struct FinderAssociators : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return ClientAssociations(ctx, category, true);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
-		const auto &set = sctx->getSelf()->associators[category];
-		ObjectFinderResult vec;
+		ServerGameObject* self = sctx->getSelf();
+		const auto &set = self->associators[category];
+		// in the order they registered, as WKB.exe lists them (ServerGameObject::associatorSeq)
+		std::vector<std::pair<uint64_t, ServerGameObject*>> found;
 		for (auto& ref : set)
-			if (ref && ref->isInteractable())
-				vec.push_back(ref);
+			if (ref && ref->isInteractable()) {
+				auto it = self->associatorSeq.find({ category, ref.objid });
+				found.emplace_back(it != self->associatorSeq.end() ? it->second : 0, ref.get());
+			}
+		static const bool byId = getenv("WKB_ASSOCIATORS_BY_ID") != nullptr; // (the old order: test 124's before)
+		if (!byId)
+			std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		ObjectFinderResult vec;
+		for (const auto& f : found)
+			vec.push_back(f.second);
 		return vec;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {

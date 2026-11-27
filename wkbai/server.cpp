@@ -222,6 +222,9 @@ void Server::loadSaveGame(const char * filename)
 	for (auto &t : postAssociations)
 		std::get<0>(t)->associateObject(std::get<1>(t), findObject(std::get<2>(t)));
 	postAssociations.clear();
+	// the associators' order as saved (wkbai's save file), else as loaded
+	if (!parts.associators.empty())
+		associatorsLoadText(parts.associators);
 	for (auto& [task, id] : postTaskTargets)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
@@ -1086,6 +1089,7 @@ void Server::destroyObject(ServerGameObject* obj)
 		for (const SrvGORef& ass : ref.second) {
 			assert(ass.get());
 			ass->associators[ref.first].erase(obj);
+			ass->associatorSeq.erase({ ref.first, obj->id });
 		}
 	for (auto& ref : obj->associators)
 		for (const SrvGORef& ass : ref.second) {
@@ -1957,7 +1961,8 @@ void ServerGameObject::associateObject(int category, ServerGameObject * associat
 	assert(this && associated);
 	if (this->associates[category].insert(associated).second)
 		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 1, this, category, associated)) Server::instance->sendToAll(msg); }
-	associated->associators[category].insert(this);
+	if (associated->associators[category].insert(this).second && Server::instance)
+		associated->associatorSeq[{ category, id }] = ++Server::instance->associationSeq;
 	// the AI tests: a missile's firer is registered after its target (Mechanics\fort attack.cpp,
 	// Fire Arrow.cpp): a building's shot counts for its player against the target's
 	if (Server::instance && associated->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE) {
@@ -1981,6 +1986,7 @@ void ServerGameObject::dissociateObject(int category, ServerGameObject * associa
 	if (this->associates[category].erase(associated))
 		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 2, this, category, associated)) Server::instance->sendToAll(msg); }
 	associated->associators[category].erase(this);
+	associated->associatorSeq.erase({ category, id });
 }
 
 void ServerGameObject::clearAssociates(int category)
@@ -1989,8 +1995,10 @@ void ServerGameObject::clearAssociates(int category)
 	auto& set = associates[category];
 	if (set.empty())
 		return;
-	for (auto &obj : set)
+	for (auto &obj : set) {
 		obj->associators[category].erase(this);
+		obj->associatorSeq.erase({ category, id });
+	}
 	set.clear();
 	{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 3, this, category, nullptr)) Server::instance->sendToAll(msg); }
 }

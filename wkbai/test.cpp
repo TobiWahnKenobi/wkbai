@@ -16162,6 +16162,243 @@ void Test_Latitude()
 	printf("LATITUDE all %d\n", bad == 0 ? 1 : 0);
 }
 
+// Barbarian village (Mechanics\Barbarian Generator.cpp): "Barbarian Generator Creation" stamps a
+// "Barbarian Generator" down by a marker, its "Random Barbarians" order creates the barbarians
+// LOCATION_OF the building, whose centre tiles its footprint ("Barbarian Settlement") blocks.
+// Each barbarian must stand on a free tile, and the village's guard must walk out of the ring of
+// huts to enemy peasants 25 m away on every side and attack them.
+void Test_BarbarianVillage()
+{
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 4247u;
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	const GameSet& gs = *server.gameSet;
+	const int creation = gs.objectCreations.names.getIndex("Barbarian Generator Creation");
+	const GameObjBlueprint* markerBp = gs.findBlueprint(Tags::GAMEOBJCLASS_MARKER, "Barbarian Generator Marker");
+	const GameObjBlueprint* genBp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barbarian Generator");
+	const GameObjBlueprint* barbBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Barbarian");
+	const GameObjBlueprint* peasantBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const int attackCmd = gs.commands.names.getIndex("Attack");
+	const int minB = gs.items.names.getIndex("Min Barbarians"), maxB = gs.items.names.getIndex("Max Barbarians");
+	ServerGameObject* barbs = nullptr;
+	ServerGameObject* foe = server.findObject(1027);
+	for (const auto& [type, players] : server.getLevel()->children)
+		for (CommonGameObject* p : players)
+			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name == "Baresark Player")
+				barbs = (ServerGameObject*)p;
+	if (creation < 0 || !markerBp || !genBp || !barbBp || !peasantBp || attackCmd < 0 || minB < 0 || maxB < 0 || !barbs || !foe) {
+		printf("BARBVILLAGE not set up (creation %d, marker %d, generator %d, barbarian %d, peasant %d, attack %d, items %d %d, baresark %d, foe %d)\nBARBVILLAGE FAILED (1)\n",
+			creation, !!markerBp, !!genBp, !!barbBp, !!peasantBp, attackCmd, minB, maxB, !!barbs, !!foe);
+		return;
+	}
+	auto step = [&](int seconds) {
+		for (int i = 0; i < seconds * 50; i++) {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
+	};
+	// an open land spot near the map's middle (11 x 11 tiles free: the village and room round it)
+	Terrain* t = server.terrain;
+	const auto [pw, ph] = t->getNumPlayableTiles();
+	Vector3 at(0, 0, 0);
+	for (int r = 0; r < std::max(pw, ph) / 2 && at.x == 0; r++)
+		for (int z = ph / 2 - r; z <= ph / 2 + r && at.x == 0; z++)
+			for (int x = pw / 2 - r; x <= pw / 2 + r && at.x == 0; x++) {
+				bool ok = x > 16 && z > 16 && x < pw - 17 && z < ph - 17;
+				for (int dz = -5; dz <= 5 && ok; dz++)
+					for (int dx = -5; dx <= 5 && ok; dx++) {
+						const TerrainTile* tile = t->getPlayableTile(x + dx, z + dz);
+						ok = tile && !tile->fullOfWater && !MovementController::isTerrainBlocked(barbBp, x + dx, z + dz) && !MovementController::isTileBlocked(barbBp, x + dx, z + dz);
+					}
+				if (ok)
+					at = Vector3(x * 5.0f + 2.5f, t->getHeightEx(x * 5.0f + 2.5f, z * 5.0f + 2.5f, false), z * 5.0f + 2.5f);
+			}
+	if (at.x == 0) {
+		printf("BARBVILLAGE no open spot\nBARBVILLAGE FAILED (1)\n");
+		return;
+	}
+	server.getLevel()->setItem(minB, 4.0f);
+	server.getLevel()->setItem(maxB, 4.0f);
+	ServerGameObject* marker = server.spawnObject(markerBp, barbs, at, Vector3(0, 0, 0));
+	{
+		SrvScriptContext ctx(&server, marker);
+		gs.objectCreations[creation].run(marker, &ctx);
+	}
+	ServerGameObject* village = nullptr;
+	if (auto it = barbs->children.find(GameObjBlueprintIndex(genBp)); it != barbs->children.end() && !it->second.empty())
+		village = (ServerGameObject*)*it->second.begin();
+	if (!village) {
+		printf("BARBVILLAGE no Barbarian Generator stamped down near (%.1f,%.1f)\nBARBVILLAGE FAILED (1)\n", at.x, at.z);
+		return;
+	}
+	step(2);
+	// the barbarians: the player's own, and those its army holds (TRANSFER_CONTROL)
+	std::vector<SrvGORef> raiders;
+	auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* c : children) {
+				if (c->blueprint == barbBp)
+					raiders.emplace_back((ServerGameObject*)c);
+				self(c, self);
+			}
+	};
+	collect(barbs, collect);
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	auto blockedAt = [&](const Vector3& p) {
+		const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+		if (tx < 0 || tz < 0 || tx >= tw || tz >= th)
+			return true;
+		const auto& tile = server.tiles[(size_t)tz * tw + tx];
+		return tile.building.getFrom<Server>() && !tile.buildingPassable;
+	};
+	printf("BARBVILLAGE village %u at (%.1f,%.1f), %zu barbarians\n", village->id, village->position.x, village->position.z, raiders.size());
+	int failures = raiders.empty() ? 1 : 0;
+	std::vector<Vector3> start;
+	for (SrvGORef& r : raiders) {
+		start.push_back(r->position);
+		const bool blocked = blockedAt(r->position);
+		printf("BARBVILLAGE barbarian %u at (%.1f,%.1f), %.1f m from the centre, on a blocked tile %d\n", r->id, r->position.x, r->position.z,
+			(r->position - village->position).len2xz(), (int)blocked);
+		if (blocked)
+			failures++;
+	}
+	// enemy peasants 25 m from the village (in the barbarians' sight) to the east, north, west and
+	// south, nobody ordered: the village's guarding army ("Attack All Enemy Characters I Can See
+	// Within Attack Range Of Guardee", its "My Attack Range" 75 m: the army is the village's first
+	// associator) sends its barbarians out of the ring of huts to each of them
+	const int hp = gs.items.names.getIndex("Hit Points");
+	struct Prey { SrvGORef obj; Vector3 at; float hp0 = 0.0f, closest = 1e9f; int hitAt = -1; };
+	std::vector<Prey> prey;
+	for (int a = 0; a < 4; a++) {
+		const Vector3 p = at + Vector3(std::cos(a * 1.5708f) * 25.0f, 0, std::sin(a * 1.5708f) * 25.0f);
+		Prey pr;
+		pr.at = Vector3(p.x, t->getHeightEx(p.x, p.z, false), p.z);
+		pr.obj = server.spawnObject(peasantBp, foe, pr.at, Vector3(0, 0, 0));
+		pr.hp0 = pr.obj ? pr.obj->getItem(hp) : 0.0f;
+		prey.push_back(pr);
+	}
+	// WKB_BARB_SAVE=<name>: this moment saved as Save_Games\<name>.sav (to watch it in the game)
+	if (const char* name = getenv("WKB_BARB_SAVE"); name && *name) {
+		std::error_code dirError;
+		std::filesystem::create_directories(g_userPath / "saved" / "Save_Games", dirError);
+		const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(std::string(name) + ".sav"));
+		printf("BARBVILLAGE saved %s: %d\n", path.c_str(), (int)server.saveGame(path.c_str()));
+	}
+	std::vector<float> farthest(raiders.size(), 0.0f);
+	// the guard's state every 10 s (WKB_BARB_TRACE): the army's order and task, its subordinates,
+	// the targets it registered, each barbarian's order and parent
+	auto orderName = [&](ServerGameObject* o) {
+		Order* od = o ? o->orderConfig.getCurrentOrder() : nullptr;
+		Task* tk = od ? od->getCurrentTask() : nullptr;
+		return (od ? gs.orders.getString(od->blueprint->bpid) : std::string("none")) + " / "
+			+ (tk ? gs.tasks.getString(tk->blueprint->bpid) : std::string("-"));
+	};
+	auto assoc = [&](ServerGameObject* o, const char* cat) {
+		const int c = gs.associations.names.getIndex(cat);
+		if (c < 0 || !o)
+			return -1;
+		auto it = o->associates.find(c);
+		return it == o->associates.end() ? 0 : (int)it->second.size();
+	};
+	static const bool trace = getenv("WKB_BARB_TRACE") != nullptr;
+	for (int s = 0; s < 120; s++) {
+		if (trace && s % 10 == 0) {
+			std::vector<ServerGameObject*> armies;
+			for (const auto& [type, children] : barbs->children)
+				for (CommonGameObject* c : children)
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+						armies.push_back((ServerGameObject*)c);
+			for (ServerGameObject* a : armies) {
+				SrvScriptContext fctx(&server, a);
+				for (const char* fname : { "One Of My Guardees", "All Enemy Characters Within Attack Range Of Guardee", "All Enemy Characters I Can See Within Attack Range Of Guardee" }) {
+					const int fi = gs.objectFinderDefinitions.names.getIndex(fname);
+					if (fi >= 0) {
+						auto res = gs.objectFinderDefinitions[fi]->eval(&fctx);
+						printf("BARBTRACE %d s finder \"%s\": %zu%s\n", s, fname, res.size(), res.size() ? (" first " + res[0]->blueprint->name).c_str() : "");
+					}
+				}
+				printf("BARBTRACE diplomacy Baresark-1027 %d\n", server.getDiplomaticStatus(barbs, foe));
+				size_t subs = 0;
+				for (const auto& [type, children] : a->children)
+					subs += children.size();
+				printf("BARBTRACE %d s army %u %s: %zu subordinates, in range %d, victims %d, guarding %d\n", s, a->id, orderName(a).c_str(), subs,
+					assoc(a, "Units In Range I Should Attack"), assoc(a, "Victims"), assoc(a, "My Guarding Target"));
+			}
+			for (SrvGORef& r : raiders)
+				if (r)
+					printf("BARBTRACE %d s barbarian %u at (%.1f,%.1f) %s, parent %s, guarding %d\n", s, r->id, r->position.x, r->position.z, orderName(r.get()).c_str(),
+						r->parent ? r->parent->blueprint->name.c_str() : "none", assoc(r.get(), "My Guarding Target"));
+		}
+		step(1);
+		for (Prey& pr : prey) {
+			if (pr.hitAt < 0 && (!pr.obj || pr.obj->getItem(hp) < pr.hp0))
+				pr.hitAt = s + 1;
+			for (SrvGORef& r : raiders)
+				if (r && pr.obj)
+					pr.closest = std::min(pr.closest, (r->position - pr.obj->position).len2xz());
+		}
+		for (size_t i = 0; i < raiders.size(); i++)
+			if (raiders[i])
+				farthest[i] = std::max(farthest[i], (raiders[i]->position - start[i]).len2xz());
+	}
+	for (size_t i = 0; i < raiders.size(); i++)
+		printf("BARBVILLAGE barbarian %zu: went up to %.1f m from where it was made\n", i, farthest[i]);
+	static const char* const sides[4] = { "east", "north", "west", "south" };
+	for (size_t i = 0; i < prey.size(); i++) {
+		const Prey& pr = prey[i];
+		if (pr.hitAt >= 0)
+			printf("BARBVILLAGE the peasant to the %s at (%.1f,%.1f) was hit after %d s (a barbarian within %.1f m)\n", sides[i], pr.at.x, pr.at.z, pr.hitAt, pr.closest);
+		else {
+			printf("BARBVILLAGE the peasant to the %s at (%.1f,%.1f) was never hit (the nearest barbarian %.1f m)\n", sides[i], pr.at.x, pr.at.z, pr.closest);
+			failures++;
+		}
+	}
+	// the village's associators in registration order (the army first), the same after a save
+	// and a load (the "associators" section; the world's ASSOCIATE lines alone register them in
+	// the objects' order)
+	const int guardCat = gs.associations.names.getIndex("My Guarding Target");
+	auto associatorOrder = [&](ServerGameObject* obj) {
+		std::vector<std::pair<uint64_t, uint32_t>> order;
+		if (obj && guardCat >= 0)
+			if (auto it = obj->associators.find(guardCat); it != obj->associators.end())
+				for (const SrvGORef& ref : it->second) {
+					auto s = obj->associatorSeq.find({ guardCat, ref.objid });
+					order.emplace_back(s != obj->associatorSeq.end() ? s->second : 0, ref.objid);
+				}
+		std::stable_sort(order.begin(), order.end());
+		std::string text;
+		for (const auto& o : order)
+			text += " " + std::to_string(o.second);
+		return text;
+	};
+	const uint32_t villageId = village->id;
+	const std::string live = associatorOrder(village);
+	const std::string saveName = PathToUtf8(g_userPath / "saved" / "Save_Games" / "Barbarian village.sav");
+	std::error_code ec;
+	std::filesystem::create_directories(g_userPath / "saved" / "Save_Games", ec);
+	server.timeManager.pause();
+	const bool saved = server.saveGame(saveName.c_str());
+	std::string loaded;
+	{
+		Server again;
+		again.loadSaveGame("Save_Games\\Barbarian village.sav");
+		again.timeManager.pause();
+		loaded = associatorOrder(again.findObject(villageId));
+	}
+	const ServerGameObject* first = live.empty() ? nullptr : server.findObject((uint32_t)std::stoul(live.substr(1)));
+	const bool armyFirst = first && first->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY;
+	printf("BARBVILLAGE the village's guarding associators:%s, after a save and a load:%s (saved %d)\n", live.c_str(), loaded.c_str(), (int)saved);
+	if (!saved || live.empty() || live != loaded || !armyFirst)
+		failures++;
+	printf(failures ? "BARBVILLAGE FAILED (%d)\n" : "BARBVILLAGE PASSED\n", failures);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -16289,6 +16526,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by habitat (patches, a tree budget), the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
 {Test_MapChecks, "Map checks: a deliberately broken map (an unreachable start, land no unit reaches with gold on it, a house over a cliff, a puddle, a seam, unfair gold, a player with no base) with every fault reported by one check pass with its place and a fix; the same map without the faults clean; a paint mends the seam; previews and cameras above ground; 4 Peaks checked"},
 {Test_Latitude, "Latitude: the sun's path and the day's length by the map's latitude (47 north as before, Britain, the equator, the Arctic, the south), the setting saved and clamped, map.json's environment.latitude written and read"},
+{Test_BarbarianVillage, "Barbarian village: the barbarians a Barbarian Generator creates stand on free tiles and walk out of the ring of huts to attack enemies 25 m away on every side"},
 };
 
 void LaunchTest()

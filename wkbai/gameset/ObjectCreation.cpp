@@ -10,6 +10,53 @@
 #include "../server.h"
 #include "ScriptContext.h"
 #include "../util/util.h"
+#include "../MovementController.h"
+#include "../terrain.h"
+
+// A character created LOCATION_OF a building stands on the building's own tiles. The Barbarian
+// Generator's raiders (Mechanics\Barbarian Generator.cpp, "Create a Barbarian Raider") are created
+// at the village's centre, which its footprint ("Barbarian Settlement") blocks, inside the ring of
+// huts: they stood there and never came out to attack. Such a character comes out on the nearest
+// tile it can stand on outside that building's footprint (the village's edge), as a trained unit
+// comes out at its building's door (Order.cpp SpawnSpot). Anywhere else it stays where it was made.
+static Vector3 OffBuildingTiles(const GameObjBlueprint* type, const Vector3& p)
+{
+	Server* server = Server::instance;
+	if (!server || !server->terrain || !server->tiles || type->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		return p;
+	const auto [w, h] = server->terrain->getNumPlayableTiles();
+	const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+	if (tx < 0 || tz < 0 || tx >= w || tz >= h)
+		return p;
+	const Server::Tile& own = server->tiles[(size_t)tz * w + tx];
+	const CommonGameObject* building = own.building.getFrom(server);
+	if (!building || own.buildingPassable || !MovementController::isTileBlocked(type, tx, tz))
+		return p;
+	// square rings round the tile, the nearest free tile to the point (rings one further than the
+	// first found, as a tile of the next ring can be nearer than a corner of this one)
+	int bx = -1, bz = -1, lastRing = 24;
+	float best = 0.0f;
+	for (int r = 1; r <= lastRing; r++) {
+		for (int z = tz - r; z <= tz + r; z++)
+			for (int x = tx - r; x <= tx + r; x++) {
+				if (std::max(std::abs(x - tx), std::abs(z - tz)) != r || x < 0 || z < 0 || x >= w || z >= h)
+					continue;
+				if (server->tiles[(size_t)z * w + x].building.getFrom(server) == building || MovementController::isTileBlocked(type, x, z))
+					continue;
+				const float dx = x * 5.0f + 2.5f - p.x, dz = z * 5.0f + 2.5f - p.z, d = dx * dx + dz * dz;
+				if (bx < 0 || d < best) {
+					bx = x; bz = z; best = d;
+				}
+			}
+		if (bx >= 0 && lastRing > r + 1)
+			lastRing = r + 1;
+	}
+	if (bx < 0)
+		return MovementController::nearestValidPosition(type, p);
+	Vector3 q(bx * 5.0f + 2.5f, 0.0f, bz * 5.0f + 2.5f);
+	q.y = server->terrain->getHeightEx(q.x, q.z, type->canWalkOnWater());
+	return q;
+}
 
 void ObjectCreation::parse(GSFileParser & gsf, const GameSet & gs)
 {
@@ -72,6 +119,9 @@ void ObjectCreation::run(ServerGameObject * creator, SrvScriptContext* ctx) cons
 		return;
 	}
 	OrientedPosition opos = createAt ? createAt->eval(ctx) : OrientedPosition({ creator->position, creator->orientation });
+	static const bool onBuilding = getenv("WKB_SPAWN_ON_BUILDING") != nullptr; // (the old way: test 124's before)
+	if (!onBuilding)
+		opos.position = OffBuildingTiles(type, opos.position);
 	ServerGameObject* created = Server::instance->spawnObject(type, ctrl, opos.position, opos.rotation);
 	// a building a script creates levels its ground as a stamped-down one does: WKB.exe puts every
 	// building on the map through 0x513790, which collects the FLATTEN tiles' corners (flag 1 to
