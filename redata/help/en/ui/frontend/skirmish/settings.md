@@ -85,7 +85,7 @@ On: every player starts with the research that lets allies see what each other's
 
 ## Barbarian Tribes
 
-On: one or two barbarian huts appear at random places that can be reached from a Manor. The barbarians are a player of their own, hostile to everyone.
+On: one or two barbarian huts appear at random places that can be reached from a Manor. The barbarians are a player of their own, hostile to everyone. A village's guard walks out of its ring of huts to fight enemies that come near, and its raiders set out from the village's edge.
 
 ## Aggressive AI
 
