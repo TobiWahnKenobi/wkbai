@@ -42,7 +42,7 @@ The skirmish lobby and the Map Editor list each folder once. A folder named "2 P
 
 ## The map's own day and weather
 
-A map's `map.json` may carry an `environment` block: whether the map has day and night and how long a day is, the hour and moon it starts with, whether it has seasons, how long they are, which comes first and how harsh they are, and how often the weather changes and which weathers may come. A new game on the map from the lobby starts with these in place of the [Seasons & Weather tab](../frontend/skirmish/weather.md)'s settings that were left at their defaults. A setting changed in the lobby stays as it was set there.
+A map's `map.json` may carry an `environment` block: whether the map has day and night and how long a day is, the hour and moon it starts with, whether it has seasons, how long they are, which comes first and how harsh they are, and how often the weather changes and which weathers may come, and the map's `latitude` (degrees, -75 to 75, negative is south; 47 if missing), which sets the sun's path and the day's length ([Sun and latitude](latitude.md)). A new game on the map from the lobby starts with these in place of the [Seasons & Weather tab](../frontend/skirmish/weather.md)'s settings that were left at their defaults. A setting changed in the lobby stays as it was set there.
 
 ## The land from a plan
 

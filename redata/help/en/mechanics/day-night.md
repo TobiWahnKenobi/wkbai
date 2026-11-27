@@ -14,7 +14,7 @@ order: 130
 
 - **Day length:** a whole day and night lasts 2 to 240 minutes of game time (20 by default).
 - **Start hour:** 0 to 23 (8 in the morning by default).
-- **The sun** rises in the east and sets in the west, at the height of a land at 47° north. Without seasons it stands as at the equinox (12 hours of daylight). With seasons, a summer day is longer (about 16 hours of 24) and a winter day shorter (about 8): with a 20-minute day, about 13 and 7 minutes of daylight.
+- **The sun** rises in the east and sets in the west, at the height of the map's latitude: 47° north unless the map sets its own ([Sun and latitude](../ui/editor/latitude.md)). Without seasons it stands as at the equinox (12 hours of daylight). With seasons, a summer day is longer (about 16 hours of 24) and a winter day shorter (about 8): with a 20-minute day, about 13 and 7 minutes of daylight.
 - **Shadows** follow the sun all day. After dark, lit windows glow in the houses near the camera.
 - The HUD shows the time of day ([the top bar](../ui/hud/top-bar.md)).
 

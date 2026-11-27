@@ -37,7 +37,7 @@ The window is called **Map editor (F8)**. You can move it and change its size. F
 
 1. **The modes:** a row of buttons that choose what you work on (below).
 2. **The mode's panel:** its tools and settings. Each mode has a page of its own.
-3. **The common part:** the map's name, undo and redo, saving and the map-wide buttons. See [Map name](#map-name), [Undo and redo](#undo-and-redo) and [saving](saving.md).
+3. **The common part:** [the sun and latitude](latitude.md), the map's name, undo and redo, saving and the map-wide buttons. See [Map name](#map-name), [Undo and redo](#undo-and-redo) and [saving](saving.md).
 4. **Messages:** what the last action did, and the results of **Check** (below).
 
 ## The modes
