@@ -65,6 +65,34 @@ namespace {
 		return k;
 	}
 
+	// the player's supports and spies free at home (in no mission, not held by another department,
+	// not at sea), by id
+	std::vector<ServerGameObject*> SupportsAtHome(ServerGameObject* me, AIController& ai)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		std::vector<ServerGameObject*> list, todo{ me };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [t, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* u = (ServerGameObject*)c;
+					if (u->deleted)
+						continue;
+					if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+						const int role = UnitRole(gs, u->blueprint);
+						if ((role == ROLE_SUPPORT || role == ROLE_SABOTEUR) && u->isInteractable() && !(u->flags & ServerGameObject::fTerminated)
+							&& !ai.ministryUnits.count(u->id) && !ai.ministryHeld.count(u->id) && !ai.navalUnits.count(u->id))
+							list.push_back(u);
+					}
+					else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						todo.push_back(u);
+				}
+		}
+		std::sort(list.begin(), list.end(), [](auto* a, auto* b) { return a->id < b->id; });
+		return list;
+	}
+
 	std::vector<ServerGameObject*> EnemyPlayers(Server& srv, ServerGameObject* me)
 	{
 		std::vector<ServerGameObject*> list;
@@ -672,7 +700,8 @@ namespace {
 					// a raid (improvement 4): fast melee first, light then heavy cavalry, then foot, archers
 					// last (archers chasing peasants ended in melee, and raids made no kills)
 					// siege engines go with the attacks on buildings first, and never on a raid
-					if (IsSiegeName(u->blueprint->name) && !(MinOff() & 8192))
+					// (every engine with the specialists: Bombard, Rocket Launcher, Infernal Engine, Rock Thrower, ...)
+					if ((IsSiegeName(u->blueprint->name) || (!(MinOff() & 524288) && UnitRole(g.server.gameSet.get(), u->blueprint) == ROLE_ENGINE)) && !(MinOff() & 8192))
 						return m.kind == Mission::RAZE || m.kind == Mission::PALACE ? 5000.0f : -5000.0f;
 					if (m.kind == Mission::RAID && !(MinOff() & 4096))
 						return (cls == 4 ? 3000.0f : cls == 3 ? 2000.0f : cls == 1 ? 1000.0f : cls == 2 ? 0.0f : 500.0f) + AIUtil::UnitPower(u) * 0.01f;
@@ -683,6 +712,23 @@ namespace {
 					return sa != sb ? sa > sb : a->id < b->id; });
 				std::vector<ServerGameObject*> given(free.begin(), free.begin() + std::min<size_t>(need, free.size()));
 				free.erase(free.begin(), free.begin() + given.size());
+				// the supports with an attack (WKB_MINOFF 524288 off): one per 8 soldiers of those
+				// the free fighters leave at home (priests, bishops, inquisitors, priestesses, spies:
+				// not fighters, so no mission ever took them; they heal, curse, bless and set fires
+				// where the mission fights, by the abilities' rules)
+				if (!(MinOff() & 524288) && (m.kind == Mission::PALACE || m.kind == Mission::RAZE)) {
+					const GameSet* gs = g.server.gameSet.get();
+					int room = std::max(1, (int)given.size() / 8);
+					for (ServerGameObject* u : SupportsAtHome(me, ai)) {
+						if (room <= 0)
+							break;
+						const int role = UnitRole(gs, u->blueprint);
+						if ((role != ROLE_SUPPORT && role != ROLE_SABOTEUR) || std::find(given.begin(), given.end(), u) != given.end())
+							continue;
+						given.push_back(u);
+						room--;
+					}
+				}
 				for (ServerGameObject* u : given) {
 					m.units.push_back(u->id);
 					ai.ministryUnits.insert(u->id);

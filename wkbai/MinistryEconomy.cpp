@@ -22,10 +22,18 @@
 #include "gameset/condition.h"
 #include "NNSearch.h"
 #include "PeasantLodging.h"
+#include "Naval.h"
+#include "StampdownPlan.h"
+#include "gameset/Commission.h"
+#include "gameset/finder.h"
+#include "gameset/position.h"
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 namespace Ministry {
+
+static bool Lodged(const ServerGameObject* p);
 
 namespace {
 	struct Items {
@@ -82,6 +90,200 @@ namespace {
 		float period() const override { return 10.0f; }
 		std::map<uint32_t, std::pair<uint32_t, float>> repairing; // building -> (peasant, since)
 
+		// The General's plan ahead (WKB_MINOFF 524288 off): the Kingmaker's second building commission
+		// ("Pure Celestial Building Commission" after "Pure Celestial Economic Building Commission",
+		// and so on) holds the buildings that unlock the alignment's units (Cathedral, Michael Statue;
+		// Henge, Hall Of Warriors, Black Mass, Wickerman; University, Observatory, Arcanum, ...). The
+		// scripts start it only once the economic one is complete, which no game reached in 45
+		// minutes, so no AI ever trained a spy, an Undead Legion, a Gunner or a Rocket Launcher. From
+		// minute 10, with a surplus, one of its buildings at a time is laid where the scripts would
+		// lay it (the requirement's own site rule) and three peasants build it.
+		uint32_t planFoundation = 0;
+		float planSince = 0.0f;
+		std::vector<uint32_t> planBuilders;
+		void planAhead(Government& g) {
+			Server& srv = g.server;
+			ServerGameObject* me = g.player();
+			const GameSet* gs = srv.gameSet.get();
+			const float now = g.now();
+			AIController& ai = me->aiController;
+			auto release = [&]() {
+				for (uint32_t id : planBuilders)
+					ai.ministryHeld.erase(id);
+				planBuilders.clear();
+			};
+			if (planFoundation) {
+				ServerGameObject* f = srv.findObject(planFoundation);
+				// (a foundation becomes its building once building starts: done when that stands whole)
+				const bool built = f && !f->deleted && f->blueprint->name.find("Foundation") == std::string::npos
+					&& g_items.si >= 0 && g_items.siCap >= 0 && f->getItem(g_items.si) >= 0.98f * f->getItem(g_items.siCap);
+				if (!f || f->deleted || built || now - planSince > 600.0f) {
+					g.log(BUILDERS, "plan ahead: %u %s", planFoundation, built ? "built" : !f || f->deleted ? "lost" : "given up");
+					release();
+					planFoundation = 0;
+				}
+				else {
+					// (the builders that left it: others in their place, three at most)
+					static const int build = gs->orders.names.getIndex("Build");
+					planBuilders.erase(std::remove_if(planBuilders.begin(), planBuilders.end(), [&](uint32_t id) {
+						ServerGameObject* p = srv.findObject(id);
+						Order* o = p && !p->deleted ? p->orderConfig.getCurrentOrder() : nullptr;
+						if (o && o->blueprint->bpid == build)
+							return false;
+						ai.ministryHeld.erase(id);
+						return true; }), planBuilders.end());
+					sendBuilders(g, f, 3 - (int)planBuilders.size());
+					return;
+				}
+			}
+			if (g.played() < 600.0f || (MinOff() & 524288))
+				return;
+			// the General's plan: its building commission running, or the one after the economic
+			// building commission running. (Running, it wants its alignment's buildings by equations
+			// that stay 0: a traced game had "Pure Celestial Building Commission" from the start, and
+			// Cathedral, Michael Statue, Tavern, Armoury and Church at 0 wanted all of 45 minutes.)
+			const GSCommission* plan = nullptr;
+			ServerGameObject* handler = nullptr;
+			const CommissionInstance* running = nullptr;
+			for (const CommissionInstance& ci : ai.commissionInstances) {
+				const std::string& n = gs->commissions.getString(ci.blueprint);
+				if (n.find("Building Commission") == std::string::npos || !ci.handlerObject)
+					continue;
+				if (n.find("Economic Building Commission") == std::string::npos) {
+					plan = ci.blueprint;
+					handler = ci.handlerObject.get();
+					running = &ci;
+					break;
+				}
+				const int i = gs->commissions.names.getIndex(n.substr(0, n.find("Economic Building Commission")) + "Building Commission");
+				if (i >= 0) {
+					plan = &gs->commissions[i];
+					handler = ci.handlerObject.get();
+				}
+			}
+			if (!plan || !handler)
+				return;
+			// (the buildings that unlock units only, the rest stays the scripts': a filter by offered
+			// commands took the Watch Tower, Guildhall and Fort, economy and walls, first)
+			auto unlocks = [&](const GameObjBlueprint* bp) {
+				static const char* const UNLOCKERS[] = { "Tavern Wood", "Armoury Stone", "Church Stone", "Monastery", "Holy Chapter", "Cathedral Stone", "Michael Statue",
+					"Temple", "Henge", "Hall Of Warriors", "Black Mass", "Wickerman", "Arcanum", "University", "Observatory", "Scriptorium" };
+				for (const char* n : UNLOCKERS)
+					if (bp->name == n)
+						return true;
+				return false;
+			};
+			ServerGameObject* palace = AIUtil::Palace(me);
+			const float wood = me->getItem(Tags::PDITEM_WOOD), gold = me->getItem(Tags::PDITEM_GOLD), food = me->getItem(Tags::PDITEM_FOOD);
+			SrvScriptContext ctx{ &srv, handler };
+			for (const auto& req : plan->buildingRequirements) {
+				const GameObjBlueprint* bp = req.bpBuilding;
+				const GameObjBlueprint* fbp = bp ? gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, bp->name + " Foundation") : nullptr;
+				const int cmd = bp ? gs->commands.names.getIndex("Build " + bp->name) : -1;
+				if (!fbp || cmd < 0 || !unlocks(bp) || req.fdAlreadyHaving->eval(&ctx).size() > 0 || HasFoundation(me, fbp))
+					continue;
+				// (wanted by the running plan already: the scripts lay it)
+				if (running && req.vdCountNeeded->eval(&ctx) > 0.0f)
+					continue;
+				// (its cost and a little: the scripts spend every stock as it comes in, a surplus of 300 was
+				// never there in a traced game)
+				if (food < fbp->getStartingItemValue(Tags::PDITEM_FOOD_COST) || wood < fbp->getStartingItemValue(Tags::PDITEM_WOOD_COST) + 50.0f
+					|| gold < fbp->getStartingItemValue(Tags::PDITEM_GOLD_COST) + 20.0f) {
+					if (thinks % 6 == 0)
+						g.log(BUILDERS, "plan ahead: %s waits for %.0f/%.0f/%.0f (have %.0f/%.0f/%.0f)", bp->name.c_str(), fbp->getStartingItemValue(Tags::PDITEM_FOOD_COST),
+							fbp->getStartingItemValue(Tags::PDITEM_WOOD_COST), fbp->getStartingItemValue(Tags::PDITEM_GOLD_COST), food, wood, gold);
+					continue; // (the next one that can be paid)
+				}
+				// (the game's own command must allow it: its tech level, no building of another alignment)
+				ServerGameObject* peasant = nullptr;
+				for (ServerGameObject* p : AIUtil::Peasants(me))
+					if (p->isInteractable() && !ai.ministryHeld.count(p->id)) { peasant = p; break; }
+				if (!peasant || !gs->commands[cmd].canBeExecuted(peasant))
+					continue;
+				OrientedPosition site = req.pdBuildPosition->eval(&ctx);
+				if (site.position.x == 0.0f && site.position.z == 0.0f)
+					continue;
+				site.position = Naval::HomeSite(me, fbp, site.position);
+				// (no site comes back as the map's corner too, (5, 5): within 400 m of the palace only)
+				if (!palace || (site.position - palace->position).sqlen2xz() > 400.0f * 400.0f)
+					continue;
+				// (the scripts' site refused: one round the palace, 30 to 200 m out, four ways turned)
+				Vector3 yaw(0, 0, 0);
+				if (StampdownPlan::getStampdownPlan(&srv, me, fbp, site.position, yaw).status != StampdownPlan::Status::Valid) {
+					bool found = false;
+					for (float r = 30.0f; r <= 200.0f && !found; r += 10.0f)
+						for (int k = 0; k < 24 && !found; k++) {
+							const float a = k * 6.2831853f / 24.0f + r * 0.03f;
+							const Vector3 q(palace->position.x + r * std::sin(a), palace->position.y, palace->position.z + r * std::cos(a));
+							for (int t = 0; t < 4 && !found; t++)
+								if (StampdownPlan::getStampdownPlan(&srv, me, fbp, q, Vector3(0, t * 1.5707963f, 0)).status == StampdownPlan::Status::Valid) {
+									site.position = q;
+									yaw = Vector3(0, t * 1.5707963f, 0);
+									found = true;
+								}
+						}
+					if (!found) {
+						g.log(BUILDERS, "plan ahead: no site for %s", bp->name.c_str());
+						continue;
+					}
+				}
+				ServerGameObject* f = srv.stampdownObject(fbp, me, site.position, yaw, false, true);
+				if (!f) {
+					g.log(BUILDERS, "plan ahead: %s refused at (%.0f, %.0f)", bp->name.c_str(), site.position.x, site.position.z);
+					continue;
+				}
+				handler->sendEvent(Tags::PDEVENT_ON_COMMISSIONED, f);
+				planFoundation = f->id;
+				planSince = now;
+				g.board.report("builders.planLaid", g.board.get("builders.planLaid") + 1);
+				g.log(BUILDERS, "plan ahead: %s laid at (%.0f, %.0f) from \"%s\"", bp->name.c_str(), site.position.x, site.position.z, gs->commissions.getString(plan).c_str());
+				sendBuilders(g, f, 3);
+				return;
+			}
+		}
+		static bool HasFoundation(ServerGameObject* me, const GameObjBlueprint* fbp) {
+			std::vector<ServerGameObject*> todo{ me };
+			while (!todo.empty()) {
+				ServerGameObject* o = todo.back();
+				todo.pop_back();
+				for (const auto& [t, children] : o->children)
+					for (CommonGameObject* c : children) {
+						auto* b = (ServerGameObject*)c;
+						if (b->deleted || b->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							continue;
+						if (b->blueprint == fbp)
+							return true;
+						todo.push_back(b);
+					}
+			}
+			return false;
+		}
+		void sendBuilders(Government& g, ServerGameObject* f, int want) {
+			if (want <= 0)
+				return;
+			Server& srv = g.server;
+			ServerGameObject* me = g.player();
+			AIController& ai = me->aiController;
+			static const int build = srv.gameSet->orders.names.getIndex("Build");
+			if (build < 0)
+				return;
+			std::vector<ServerGameObject*> peasants = AIUtil::Peasants(me);
+			std::sort(peasants.begin(), peasants.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+				const float da = (a->position - f->position).sqlen2xz(), db = (b->position - f->position).sqlen2xz();
+				return da != db ? da < db : a->id < b->id; });
+			for (ServerGameObject* p : peasants) {
+				if (want <= 0)
+					break;
+				if (!p->isInteractable() || ai.ministryHeld.count(p->id) || ai.navalUnits.count(p->id) || Lodged(p))
+					continue;
+				if (p->orderConfig.addOrder(&srv.gameSet->orders[build], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, f)) {
+					ai.ministryHeld.insert(p->id);
+					planBuilders.push_back(p->id);
+					want--;
+				}
+			}
+		}
+
 		void think(Government& g) override {
 			if (MinOff() & 4) return;
 			Server& srv = g.server;
@@ -89,6 +291,7 @@ namespace {
 			if (!me)
 				return;
 			g_items.update(srv.gameSet.get());
+			planAhead(g);
 			if (g_items.si < 0 || g_items.siCap < 0 || g_items.repair < 0)
 				return;
 			const float now = g.now();
@@ -149,10 +352,27 @@ namespace {
 		void save(const Government&, std::vector<std::string>& lines) const override {
 			for (const auto& [b, r] : repairing)
 				lines.push_back("repair " + std::to_string(b) + " " + std::to_string(r.first) + " " + std::to_string(r.second));
+			if (planFoundation) {
+				std::string l = "plan " + std::to_string(planFoundation) + " " + std::to_string(planSince);
+				for (uint32_t id : planBuilders)
+					l += " " + std::to_string(id);
+				lines.push_back(l);
+			}
 		}
 		void load(Government& g, const std::string& line) override {
 			unsigned b = 0, p = 0;
 			float since = 0.0f;
+			if (line.rfind("plan ", 0) == 0) {
+				std::istringstream in(line.substr(5));
+				in >> planFoundation >> planSince;
+				planBuilders.clear();
+				for (uint32_t id; in >> id;) {
+					planBuilders.push_back(id);
+					if (ServerGameObject* me = g.player())
+						me->aiController.ministryHeld.insert(id);
+				}
+				return;
+			}
 			if (sscanf(line.c_str(), "repair %u %u %f", &b, &p, &since) == 3) {
 				repairing[b] = { p, since };
 				if (ServerGameObject* me = g.player())
@@ -176,14 +396,23 @@ namespace {
 			// fighters can't be trained any more, half that, military first (improvement 7: alone under
 			// Plus v9.5 the ministries built half again as many buildings and ended at the same population)
 			const bool full = !(MinOff() & 32768) && g.board.get("labour.full") >= 0.9;
-			const float f = full ? 0.5f : 1.0f;
+			// (the researches that unlock units first, from half the surplus: WKB_MINOFF 524288 off.
+			// They ranked last before, as neither military nor economy, and no AI had them)
+			const bool unlocks = !(MinOff() & 524288);
+			const float f = full || unlocks ? 0.5f : 1.0f;
 			if (me->getItem(Tags::PDITEM_FOOD) < 800.0f * f || me->getItem(Tags::PDITEM_WOOD) < 400.0f * f || me->getItem(Tags::PDITEM_GOLD) < 300.0f * f)
 				return;
+			const bool surplus = !(me->getItem(Tags::PDITEM_FOOD) < 800.0f * (full ? 0.5f : 1.0f) || me->getItem(Tags::PDITEM_WOOD) < 400.0f * (full ? 0.5f : 1.0f)
+				|| me->getItem(Tags::PDITEM_GOLD) < 300.0f * (full ? 0.5f : 1.0f));
 			const GameSet* gs = srv.gameSet.get();
 			const bool military = full || g.personality.aggression >= 0.5f;
+			static const char* const UNLOCK[] = { "Gunpowder", "Rocketry", "Espionage", "Bayonet", "Trebuchet", "Undead Legion", "Infernal Engine", "Sacrifice for",
+				"Ghost Army", "Charm of Madness", "Malleus", "Crusade", "Chivalry", "Upgrade Holy Chapter", "Greek Fire", "Grapeshot" };
 			static const char* const MILITARY[] = { "Infantry", "Cavalry", "Crossbow", "Gunpowder", "Arrow", "Blade", "Armour", "Barding", "Chivalry", "Grapeshot", "Greek Fire" };
 			static const char* const ECONOMY[] = { "Sawmill", "Windmill", "Plough", "Crop", "Banking", "Harness", "Alchemy" };
 			auto kindOf = [&](const std::string& name) {
+				if (unlocks)
+					for (const char* w : UNLOCK) if (name.find(w) != std::string::npos) return 0;
 				for (const char* w : MILITARY) if (name.find(w) != std::string::npos) return 1;
 				for (const char* w : ECONOMY) if (name.find(w) != std::string::npos) return 2;
 				return 3;
@@ -212,7 +441,9 @@ namespace {
 					if (name.rfind("Research ", 0) != 0 || !cmd->canBeExecuted(b))
 						continue;
 					const int kind = kindOf(name);
-					const int rank = kind == 3 ? 3 : (kind == 1) == military ? 1 : 2;
+					if (kind != 0 && !surplus)
+						continue; // (from half the surplus the unlocks only)
+					const int rank = kind == 0 ? 0 : kind == 3 ? 3 : (kind == 1) == military ? 1 : 2;
 					if (rank < bestRank) { bestRank = rank; best = cmd; where = b; }
 				}
 			if (!best)
@@ -275,6 +506,11 @@ void EconomyNeeds(Government& g)
 	// mined gave Belisar 212 characters at 30 minutes against 135
 	if (goldNeeded < 300.0 && g.board.get("economy.wood") > 600.0)
 		goldNeeded = 300.0;
+	// and for the specialists (WKB_MINOFF 524288 off): from minute 8, 400. Every special unit and the
+	// plan's buildings cost gold, and the scripts mine none: the gold stayed at the start's 200 and
+	// below the whole game, so none of them was ever paid for
+	if (!(MinOff() & 524288) && g.played() > 480.0f)
+		goldNeeded = std::max(goldNeeded, 400.0);
 	g.board.report("economy.goldNeeded", goldNeeded);
 	const int want = goldNeeded > gold && income < 20.0 ? 3 + (g.personality.aggression > 0.5f ? 1 : 0) : goldNeeded <= gold || gold > 1500.0 ? 0 : -1;
 	if (want > 0)
@@ -507,7 +743,10 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 		// and in a stage-1 game wood stayed under 300 for 10 minutes, so no miner ever went)
 		const bool woodToSpare = me->getItem(Tags::PDITEM_WOOD) > 500.0f;
 		// (from the wood only with wood to spare: soldiers need it)
-		const int fromWood = woodToSpare ? want : 0;
+		// (with the specialists, two woodcutters under 500 wood too, and the Kingmaker's "AI Chop Tree"
+		// ones count: the gold has a use now, see below)
+		const bool specialists = !(MinOff() & 524288);
+		const int fromWood = woodToSpare ? want : specialists ? std::min(want, 2) : 0;
 		int woodTaken = 0;
 		for (const auto& [id, since] : goldMiners)
 			woodTaken++;
@@ -519,8 +758,9 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 				// from the idle alone, minutes late. Left so on purpose: taking the "AI Chop Tree" woodcutters
 				// too, plus two of them under 500 wood and miners for a fighter building short of gold, gave
 				// 3-10 times the miners and lost: 37 of 72 games on the fair maps against 43, the army a
-				// fifth smaller; the gold rose by 10-30 only. Wood is what is short, not gold. 2026-11-24)
-				if (order.empty() || (order == "Chop Tree" && woodTaken < fromWood))
+				// fifth smaller; the gold rose by 10-30 only. Wood is what is short, not gold. 2026-11-24.
+				// That was before anything could spend it: with the specialists, they count)
+				if (order.empty() || ((order == "Chop Tree" || (specialists && order == "AI Chop Tree")) && woodTaken < fromWood))
 					candidates.push_back(p);
 			}
 		std::stable_sort(candidates.begin(), candidates.end(), [&](ServerGameObject* a, ServerGameObject* b) {

@@ -18,15 +18,25 @@
 #include "gameset/gameset.h"
 #include "gameset/command.h"
 #include "NNSearch.h"
+#include "StampdownPlan.h"
 #include <algorithm>
 #include <cmath>
 
 namespace Ministry {
 
 namespace {
-	enum Aim : uint8_t { HURT_FRIEND, ENEMY_FIGHTER, ENEMY_BUILDING, SELF_IN_FIGHT };
-	struct Rule { const char* command; Aim aim; float reach; };
+	enum Aim : uint8_t { HURT_FRIEND, ENEMY_FIGHTER, ENEMY_BUILDING, SELF_IN_FIGHT, ENEMY_PEASANT, SELF_AT_BUILDING };
+	// (extra: the specialists' rules, WKB_MINOFF 524288 off: the powers the alignments' units
+	// offer that no rule used, from the game set's command lists)
+	struct Rule { const char* command; Aim aim; float reach; bool extra = false; };
 	const Rule RULES[] = {
+		{ "Possess", ENEMY_PEASANT, 30, true }, { "Desecrate", ENEMY_BUILDING, 30, true }, { "Plunder", ENEMY_BUILDING, 20, true },
+		{ "Burn Heretic", ENEMY_FIGHTER, 40, true }, { "Burn Unbeliever", ENEMY_FIGHTER, 40, true },
+		{ "Inflict Plague", ENEMY_FIGHTER, 60, true }, { "Inflict Lightning", ENEMY_FIGHTER, 60, true }, { "Inflict Firestorm", ENEMY_FIGHTER, 60, true },
+		{ "Inflict Wormwood", ENEMY_FIGHTER, 60, true }, { "Inflict Fimblewinter", ENEMY_FIGHTER, 60, true }, { "Inflict Earthquake", ENEMY_BUILDING, 60, true },
+		{ "Stamp!", SELF_IN_FIGHT, 25, true }, { "Shock!", SELF_IN_FIGHT, 25, true }, { "Summon Gibbering Horde", SELF_IN_FIGHT, 40, true },
+		{ "Ghost Army", SELF_IN_FIGHT, 40, true }, { "Pray for the Imperial", SELF_IN_FIGHT, 40, true },
+		{ "Trigger Explosives", SELF_AT_BUILDING, 12, true },
 		{ "Artos Heal", HURT_FRIEND, 30 }, { "Monastic Knight Heal", HURT_FRIEND, 30 }, { "Repair Character", HURT_FRIEND, 20 },
 		{ "Bless", HURT_FRIEND, 30 }, { "Barkskin", HURT_FRIEND, 30 },
 		{ "Curse", ENEMY_FIGHTER, 40 }, { "Entangle", ENEMY_FIGHTER, 40 }, { "Inflict Blindness", ENEMY_FIGHTER, 40 },
@@ -61,12 +71,56 @@ namespace {
 				return it->second;
 			std::vector<int> list;
 			for (int i = 0; i < RULE_COUNT; i++)
-				if (command[i] >= 0)
+				if (command[i] >= 0 && !(RULES[i].extra && (MinOff() & 524288)))
 					for (const Command* c : bp->offeredCommands)
 						if (c == &gs->commands[command[i]]) { list.push_back(i); break; }
 			return offered[bp] = list;
 		}
 	} g_lookup;
+
+	// A unit type's role for the training (WKB_MINOFF 524288 off). The game's "I'm A Military Unit"
+	// is 1-4 for the line (heavy and light infantry, heavy and light cavalry), 5 for the scout and
+	// the spy, 6 for engines and monsters (Bombard, Rocket Launcher, Infernal Engine, Behemoth, War
+	// Elephant, Abaddon, Michael, ...), and nothing for the priests, monks, druids and succubi.
+	// Before, only 1-4, the named siege engines and the big summons were trained.
+	int RoleOf(const GameSet* gs, const GameObjBlueprint* t)
+	{
+		static uint64_t of = 0;
+		static int military = -1, missile = -1, range = -1;
+		static std::map<const GameObjBlueprint*, int> known;
+		if (of != gs->serial) {
+			of = gs->serial;
+			military = gs->items.names.getIndex("I'm A Military Unit");
+			missile = gs->items.names.getIndex("Missile Damage");
+			range = gs->items.names.getIndex("Maximum Missile Range");
+			known.clear();
+		}
+		if (!t)
+			return ROLE_NONE;
+		if (auto it = known.find(t); it != known.end())
+			return it->second;
+		const std::string& n = t->name;
+		const int cls = military >= 0 ? (int)t->getStartingItemValue(military) : 0;
+		int role = ROLE_NONE;
+		if (n == "Sapper")
+			role = ROLE_ENGINE; // (builds the Rocket Launcher, the Trebuchet and the Ram in the field)
+		else if (cls >= 1 && cls <= 4)
+			role = ROLE_LINE;
+		else if (cls == 5)
+			role = n.find("Spy") != std::string::npos ? ROLE_SABOTEUR : ROLE_NONE;
+		else if (cls == 6) {
+			const bool far = missile >= 0 && range >= 0 && t->getStartingItemValue(missile) > 0.0f && t->getStartingItemValue(range) >= 90.0f;
+			if (n.find("Abaddon") != std::string::npos || n.find("Michael") != std::string::npos || n.find("Limbered") != std::string::npos)
+				role = ROLE_NONE; // (the big summons as before; a limbered engine is the same one packed)
+			else
+				role = IsSiegeName(n) || far || n.find("Explosive") != std::string::npos ? ROLE_ENGINE : ROLE_MONSTER;
+		}
+		else
+			for (const char* s : { "Monk", "Priest", "Bishop", "Inquisitor", "High Priestess", "Arch Druid", "Succubus" })
+				if (n == s)
+					role = ROLE_SUPPORT;
+		return known[t] = role;
+	}
 
 	float Health(const ServerGameObject* o)
 	{
@@ -76,6 +130,8 @@ namespace {
 		return cap > 0.0f ? o->getItem(g_lookup.hp) / cap : 1.0f;
 	}
 }
+
+int UnitRole(const GameSet* gs, const GameObjBlueprint* type) { return RoleOf(gs, type); }
 
 int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std::map<uint64_t, float>& ready)
 {
@@ -123,6 +179,22 @@ int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std
 				break;
 			case SELF_IN_FIGHT:
 				if (!AIUtil::EnemiesNear(me, u->position, rule.reach, false).empty() && cmd.canBeExecuted(u, nullptr))
+					target = u;
+				break;
+			case ENEMY_PEASANT: {
+				NNSearch search;
+				search.start(&srv, u->position, rule.reach);
+				std::vector<ServerGameObject*> found;
+				while (ServerGameObject* e = (ServerGameObject*)search.next())
+					if (!e->deleted && AIUtil::IsPeasant(e) && AIUtil::IsEnemy(me, e) && (e->position - u->position).sqlen2xz() <= rule.reach * rule.reach)
+						found.push_back(e);
+				std::sort(found.begin(), found.end(), [](auto* a, auto* b) { return a->id < b->id; });
+				for (ServerGameObject* e : found)
+					if (cmd.canBeExecuted(u, e)) { target = e; break; }
+				break;
+			}
+			case SELF_AT_BUILDING:
+				if (!AIUtil::EnemyBuildingsNear(me, u->position, rule.reach).empty() && cmd.canBeExecuted(u, nullptr))
 					target = u;
 				break;
 			}
@@ -262,6 +334,41 @@ int TrainByCounters(Government& g)
 					siegeOwn += isSiege(u->blueprint->name);
 		}
 	}
+	// The specialists (WKB_MINOFF 524288 off): besides the line, supports (monks, priests, bishops,
+	// inquisitors, priestesses, druids, succubi: 1 and one more per 8 soldiers, at most 8, from
+	// minute 8), monsters (Behemoth, War Elephant, Horde Spewer, ...: one per 12 soldiers, at most 4,
+	// from minute 12), engines (all of them, not only the named siege engines: the siege want, and
+	// from minute 15 one per 20 soldiers, at most 4) and two spies from minute 10. Not while the
+	// guard is short: soldiers first.
+	const bool specialists = !(MinOff() & 524288);
+	int have[ROLE_COUNT] = {}, want[ROLE_COUNT] = {};
+	if (specialists) {
+		std::vector<ServerGameObject*> todo{ me };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [t, children] : o->children)
+				for (CommonGameObject* ch : children) {
+					auto* u = (ServerGameObject*)ch;
+					if (u->deleted)
+						continue;
+					if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+						if (!(u->flags & ServerGameObject::fTerminated))
+							have[RoleOf(gs, u->blueprint)]++;
+					}
+					else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						todo.push_back(u);
+				}
+		}
+		const int soldiers = have[ROLE_LINE];
+		if (short_ == 0) {
+			want[ROLE_SUPPORT] = now > 480.0f ? std::min(8, 1 + soldiers / 8) : 0;
+			want[ROLE_MONSTER] = now > 720.0f ? std::min(4, soldiers / 12) : 0;
+			want[ROLE_ENGINE] = std::max(siegeWant, now > 900.0f ? std::min(4, soldiers / 20) : 0);
+			want[ROLE_SABOTEUR] = now > 600.0f ? 2 : 0;
+		}
+		siegeOwn = have[ROLE_ENGINE];
+	}
 	int ordered = 0;
 	for (const auto& [b, names] : AIUtil::Trainers(me, false)) {
 		const std::string* best = nullptr;
@@ -270,8 +377,14 @@ int TrainByCounters(Government& g)
 			const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
 			const int cls = AIUtil::TypeClass(type);
 			const bool big = name.find("Abaddon") != std::string::npos || name.find("Michael") != std::string::npos || name.find("Archangel") != std::string::npos;
-			const bool siege = cls == 0 && isSiege(name);
-			if (cls == 0 && !big && !(siege && siegeOwn < siegeWant))
+			const int role = specialists ? RoleOf(gs, type) : ROLE_NONE;
+			const bool special = role != ROLE_NONE && role != ROLE_LINE;
+			if (specialists && special) {
+				if (have[role] >= want[role])
+					continue;
+			}
+			const bool siege = !special && cls == 0 && isSiege(name);
+			if (cls == 0 && !big && !special && !(siege && siegeOwn < siegeWant))
 				continue;
 			float score = 1.0f;
 			if (total > 0.0f) {
@@ -289,6 +402,10 @@ int TrainByCounters(Government& g)
 				score = summons ? 3.0f : -1e9f;
 			if (siege)
 				score = 2.0f;
+			// (a specialist under its want before the line: the dearest of its role the building
+			// offers, the best one, by the cost term below turned round)
+			if (special)
+				score = 2.5f + AIUtil::TypeCost(type) * 0.0004f;
 			// a little for the cheaper: more soldiers for the food; near the population limit (80 %) the
 			// dearer instead, each place counts (improvement 7)
 			const bool full = !(MinOff() & 32768) && g.board.get("labour.full") >= 0.8;
@@ -298,10 +415,61 @@ int TrainByCounters(Government& g)
 		if (best && AIUtil::Train(me, b, *best)) {
 			ordered++;
 			own[AIUtil::TypeClass(gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, *best))]++;
+			if (specialists)
+				have[RoleOf(gs, gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, *best))]++;
 			siegeOwn += isSiege(*best);
 			const std::string k = "war.trained." + *best;
 			g.board.report(k, g.board.get(k) + 1);
 			if (short_ > 0 ? ordered >= short_ : me->getItem(Tags::PDITEM_FOOD) <= spare)
+				break;
+		}
+	}
+	// a sapper at home builds an engine when the engines are short: the Rocket Launcher (with
+	// Rocketry), the Trebuchet, the Battering Ram, in that order, whichever its commands allow, on
+	// a site round the palace (their commands stamp down a foundation the sapper then builds)
+	if (specialists && have[ROLE_ENGINE] < want[ROLE_ENGINE] + 1) {
+		static const char* const ENGINES[] = { "Build Rocket Launcher", "Build Trebuchet", "Build Battering Ram" };
+		const int build = gs->orders.names.getIndex("Build");
+		ServerGameObject* palace = AIUtil::Palace(me);
+		std::vector<ServerGameObject*> sappers;
+		for (ServerGameObject* u : me->aiController.freeFighters(palace ? palace->position : me->playerStartCameraPosition))
+			if (u->blueprint->name == "Sapper" && !u->orderConfig.getCurrentOrder())
+				sappers.push_back(u);
+		for (ServerGameObject* s : sappers) {
+			if (!palace || build < 0)
+				break;
+			bool done = false;
+			for (const char* name : ENGINES) {
+				const int ci = gs->commands.names.getIndex(name);
+				if (ci < 0)
+					continue;
+				const Command& cmd = gs->commands[ci];
+				if (!cmd.stampdownObject || std::find(s->blueprint->offeredCommands.begin(), s->blueprint->offeredCommands.end(), &cmd) == s->blueprint->offeredCommands.end()
+					|| !cmd.canBeExecuted(s))
+					continue;
+				if (!me->canAffordObject(cmd.stampdownObject))
+					continue;
+				Vector3 site(0, 0, 0);
+				for (float r = 40.0f; r <= 120.0f && site.x == 0.0f; r += 20.0f)
+					for (int k = 0; k < 16 && site.x == 0.0f; k++) {
+						const float a = k * 6.2831853f / 16.0f + r * 0.05f;
+						const Vector3 q(palace->position.x + r * std::sin(a), palace->position.y, palace->position.z + r * std::cos(a));
+						if (StampdownPlan::getStampdownPlan(&srv, me, cmd.stampdownObject, q, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid)
+							site = q;
+					}
+				if (site.x == 0.0f)
+					continue;
+				ServerGameObject* f = srv.stampdownObject(cmd.stampdownObject, me, site, Vector3(0, 0, 0), false, true);
+				if (!f)
+					continue;
+				s->orderConfig.addOrder(&gs->orders[build], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, f);
+				have[ROLE_ENGINE]++;
+				g.board.report("war.enginesLaid", g.board.get("war.enginesLaid") + 1);
+				g.log(WAR, "sapper %u builds %s at (%.0f, %.0f)", s->id, cmd.stampdownObject->name.c_str(), site.x, site.z);
+				done = true;
+				break;
+			}
+			if (done)
 				break;
 		}
 	}
