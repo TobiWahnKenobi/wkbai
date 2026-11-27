@@ -84,6 +84,17 @@ namespace MapMaterials {
 	// original maps, which the original editor made with these rules
 	json EdgeFitOf(const Terrain& t, const std::string& dbFile);
 
+	// The check pass's tile edges (step 17.8, MapChecks.h): every edge between two playable tiles
+	// where two grounds meet with no transition (their shared corners' groups differ and no EDGE
+	// rule lets the pictures touch), up to limit listed with places, counted by pair of groups,
+	// each with the group that bridges them when one does
+	json EdgeFaults(const Terrain& t, const std::string& dbFile, int limit);
+	// A live paint (author.paint, step 17.8): the group's pictures on the tiles marked (whole-map
+	// tile index, 1: paint) and the ring round them fitted with its transitions to what is there,
+	// by the solver's library (the corners' groups, then the EDGE rules against the neighbours).
+	// A tile no picture joins keeps its picture and is reported with the group that bridges.
+	bool PaintRegion(Terrain& t, const std::string& dbFile, const std::string& group, const std::vector<uint8_t>& mark, uint32_t seed, json& report, std::string& error);
+
 	// "--author materials <folder> [--out <file.json>] [--png <file.png>]": compiles the folder
 	// and gives its materials report; "--author material-presets": the presets and materials
 	int RunCommandLine(const std::vector<std::string>& args);

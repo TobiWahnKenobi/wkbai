@@ -581,6 +581,12 @@ void ClientInterface::setUpAgentWorld()
 		});
 		return out;
 	};
+	// live map authoring (interface/MapEditorAuthor.cpp)
+	agentWorld.author = [this](const nlohmann::json& req) -> nlohmann::json {
+		if (!cheatKeysAllowed() || !withServer)
+			return { { "ok", false }, { "error", "author ops work in the map editor, in single player with cheat mode on, or in test runs" } };
+		return authorOp(req);
+	};
 	AgentUi::SetWorld(&agentWorld);
 }
 
@@ -6090,6 +6096,11 @@ void ClientInterface::iter()
 	if (benchmarkCamera) {
 		client->camera.position = benchmarkPosition;
 		client->camera.orientation = benchmarkOrientation;
+	}
+	// an agent's view (author.view), held until it lets go
+	else if (authorViewHeld) {
+		client->camera.position = authorViewPosition;
+		client->camera.orientation = authorViewOrientation;
 	}
 	// the camera's own position kept over the playable map, like a player's in a first-person
 	// view: turning, tilting or raising it never moves it (not the benchmark's fixed views, nor

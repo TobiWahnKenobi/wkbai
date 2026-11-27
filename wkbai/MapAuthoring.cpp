@@ -544,6 +544,11 @@ static float SeaLevelFor(const std::string& map)
 	return j.is_discarded() ? -1e30f : MapWater::SeaLevelOf(j);
 }
 
+std::string LevelOf(const std::string& map, std::string& error)
+{
+	return LevelPath(map, error);
+}
+
 bool Describe(const std::string& map, const std::string& png, json& out, std::string& error)
 {
 	const std::string level = LevelPath(map, error);

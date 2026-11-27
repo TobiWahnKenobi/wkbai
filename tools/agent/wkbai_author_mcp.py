@@ -3,8 +3,11 @@ design maps for wkbai: know exactly what can go on a map (catalog), read existin
 (describe_map, get_map), make and change map folders (new_map, import_map, set_map, compile), and
 make the land (plan_terrain, generate_terrain, import_heightmap, import_elevation), and texture it
 by rule (set_material_rules, paint_materials, material_report).
-Steps 17.3, 17.4 and 17.5 of the RE repo's docs/engine/map-authoring.md; the water, object,
-check and preview tools follow in later steps. import_elevation never downloads: it names the
+Steps 17.3-17.8 of the RE repo's docs/engine/map-authoring.md: the water (set_water, water_report)
+and object tools (set_bases, set_scatter, objects_report), and since 17.8 one check pass (check),
+the previews (preview: top-down pictures, in-game shots from cameras above the ground) and live
+editing of a map open in the game (live_open, live_op, live_shot, live_close: the author.* ops over
+the agent-control socket). import_elevation never downloads: it names the
 tiles an area needs, and the agent asks the user before each download.
 
 Everything runs wkbai's headless commands (no window, nothing on the screen):
@@ -14,6 +17,10 @@ Everything runs wkbai's headless commands (no window, nothing on the screen):
     wkbai --author <folder>                    (compile)
     wkbai --author materials <folder> --out <file>   (compile, the materials report)
     wkbai --author material-presets --out <file>
+    wkbai --author check <map> --out <file>
+    wkbai --author preview <map> --dir <folder> --out <file>
+The in-game shots (preview shots) and the live game (live_open) run wkbai itself with a hidden
+window ("hiddenWindow": true), paused, in the same work folder.
 in a work folder of its own with its own wkconfig.json ("test": true, so a crash never shows a
 dialog) and its own user folder: maps are made in <work>\\profile\\saved\\Maps\\<name>.wkbai, which the
 game there loads as "Maps\\<name>.wkbai". --user-path puts them in another wkbai user folder (e.g.
@@ -35,10 +42,12 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import traceback
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # wkbai_agent (the live tools)
 REPO = os.path.dirname(os.path.dirname(HERE))
 DEFAULT_EXE = os.path.join(REPO, "build", "wkbai", "RelWithDebInfo", "wkbai.exe")
 PROTOCOL = "2024-11-05"
@@ -207,6 +216,40 @@ TOOLS = [
      "wood, gold, stone, food the containers hold, deposits, farmable tiles, the nearest base; per resource the smallest over the largest), the scatter counts "
      "(per rule, per base for the near-bases rules, a habitat forest's cover, patches, budget and its trees by the water against the land's, the moisture under a moisture forest), and the object warnings. picture: the top-down map.",
      obj({"map": MAP, "compile": BOOL, "picture": BOOL}, ["map"])),
+    ("check", "Every check on a map in one report (step 17.8): players (no start camera, no units), terrain (walkable share for the unit, what blocks the rest, "
+     "walkable land no unit can reach from the main land), reachability by land between every two starts (path length, detour, the narrowest point; where two "
+     "can't reach each other the two lands' nearest points as a ramp), placement (every building by the server's own rules, units in buildings or water, "
+     "deposits on buildings), water (leaks, puddles, rising and dry rivers, falls, hints), tile edges (seams: two grounds meeting with no transition), "
+     "fairness (resources and farmland near each base, the nearest rival by land, high ground, a symmetry score) and the compiler's other warnings. "
+     "Each problem: check, severity (error | warning | info), what, at [x, z] (playable metres), tile, fix, and fixOp: the author.* live op that would "
+     "make the fix (values in [ ] or < > are yours to choose). map: a folder (compiled first when stale) or an original level. "
+     "severity: the lowest to list (info, warning (default), error); checks: only these; limit (default 100). picture: problems.png (the faults as rings).",
+     obj({"map": STR, "severity": {"type": "string", "enum": ["info", "warning", "error"]}, "checks": {"type": "array", "items": STR},
+          "limit": INT, "picture": BOOL}, ["map"])),
+    ("preview", "Pictures of a map without the game, and in-game shots (step 17.8). The top-down pictures: relief (describe_map's), passability "
+     "(main land, land no unit reaches, too steep, blocking terrain, water, the ways by land between the starts and their narrowest points), water "
+     "(waterways with arrows downstream, the falls), fairness (the radius round each base), problems (the check's faults as rings), minimap (as the BCM "
+     "holds it), materials (a folder with ground rules). pictures: which (default relief, passability, problems). cameras: known-good cameras worked out "
+     "from the map's heights (each start, the first faults, a wide shot per side towards the far land; every one above the highest ground within 150 m). "
+     "shots: true renders those cameras in the game (a hidden window, nothing on the screen; the settings of the work folder's wkconfig.json, "
+     "settings: more), or shots: a list of camera labels or indices; cameras_extra: [[x, y, z, pitch, yaw], ...] of your own (y is not checked: keep it above the ground).",
+     obj({"map": STR, "pictures": {"type": "array", "items": STR}, "shots": {}, "cameras_extra": {"type": "array"}, "settings": {"type": "object"}}, ["map"])),
+    ("live_open", "Open a map in a running wkbai for live editing (step 17.8): the game loads it (a hidden window unless show: true, paused, cheats on, "
+     "agent control on a port of its own) and the live_op tool changes it in place, one undo step each, with no recompile. editor: true opens the map editor too. "
+     "One live game at a time; live_close ends it (author.save first to keep the edits in the folder).",
+     obj({"map": STR, "editor": BOOL, "show": BOOL, "port": INT, "settings": {"type": "object"}}, ["map"])),
+    ("live_op", "A live author op on the open map (live_open first). op: heights { region, mode: raise | lower | set | flatten | smooth | ramp | terrace | noise, "
+     "amount m, to m, iterations, from/to (ramp ends), step, strength, scale, seed }, paint { region, group (a base texture group: GRASS1, SAND1, ...), seed: "
+     "the group's pictures with transitions fitted round them }, water { add: [{at, level | depth}], remove: [index], removeAt: [[x, z]] }, place { blueprint, "
+     "class, player, at, yaw, count, spacing }, remove { ids | at + radius + class }, move { id, to, yaw }, check { unit, fairnessRadiusM, edges }: the "
+     "check tool's report on the map as it is now, save { name }: into the folder (hand layers, level.txt), undo, redo, view { at, from | distance + yaw, "
+     "above } or { camera: [x, y, z, pitch, yaw] } or { release: true }, state. A region: circle {at, radius} | rect [x0, z0, x1, z1] | polygon [[x, z], ...] | "
+     "line [[x, z], ...] with width; falloff m (heights). A check's fixOp can be sent as it is once its [ ] and < > values are filled in.",
+     obj({"op": STR, "args": {"type": "object"}}, ["op"])),
+    ("live_shot", "A screenshot of the open live map (live_open first): with at (and from, or distance and yaw, above) or camera, the view is set first "
+     "(above the highest ground within 150 m of the eye); without, the current view. Returns the picture.",
+     obj({"at": {"type": "array"}, "from": {"type": "array"}, "distance": NUM, "yaw": NUM, "above": NUM, "camera": {"type": "array"}, "name": STR})),
+    ("live_close", "Close the live game (live_open). save: a name first saves the map folder (author.save).", obj({"save": STR})),
 ]
 
 
@@ -930,6 +973,261 @@ class Author:
                 r["picture"] = e.reply
         return r
 
+    # --- checks, previews, live ops (step 17.8) ---
+    def _map_arg(self, m):
+        """a folder path, or an original level as given"""
+        f = self.folder(m)
+        return f if os.path.isfile(os.path.join(f, "map.json")) else m
+
+    def _bench_name(self, m):
+        """the map as the game's skirmish list names it, which a benchmark run loads: <name>.wkbai
+        for a folder in this user folder's maps, else the level as given"""
+        f = self.folder(m)
+        if os.path.isfile(os.path.join(f, "map.json")):
+            if os.path.normcase(os.path.dirname(os.path.abspath(f))) != os.path.normcase(os.path.abspath(self.maps)):
+                raise AuthorError({"error": "in-game runs load maps from " + self.maps + " only (the skirmish list): copy the folder there"})
+            return os.path.basename(f.rstrip("\\/"))
+        return os.path.basename(m)
+
+    def _stem(self, m):
+        return re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.basename(str(m).rstrip("\\/")))[:60] or "map"
+
+    def check(self, a):
+        m = self._map_arg(a["map"])
+        out = os.path.join(self.work, "check", self._stem(a["map"]) + ".json")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        self.run("check", m, "--out", out)
+        with open(out, encoding="utf-8") as f:
+            rep = json.load(f)
+        order = {"info": 0, "warning": 1, "error": 2}
+        lo = order.get(a.get("severity", "warning"), 1)
+        want = set(a.get("checks") or [])
+        probs = [p for p in rep.get("problems", []) if order.get(p.get("severity"), 0) >= lo and (not want or p.get("check") in want)]
+        probs.sort(key=lambda p: -order.get(p.get("severity"), 0))
+        limit = int(a.get("limit", 100))
+        rep["problems"] = probs[:limit]
+        rep["problemsShown"] = len(rep["problems"])
+        rep["file"] = out
+        for k in ("terrain",):
+            if isinstance(rep.get(k), dict) and len(rep[k].get("islandList", [])) > 12:
+                rep[k]["islandList"] = rep[k]["islandList"][:12]
+        if a.get("picture"):
+            pv = self.preview({"map": a["map"], "pictures": ["problems"]})
+            if isinstance(pv, dict) and "image" in pv:
+                return {"description": rep, "image": pv["image"], "path": pv["path"]}
+        return rep
+
+    @staticmethod
+    def _bmp_to_png(bmp, png):
+        d = open(bmp, "rb").read()
+        off, = struct.unpack_from("<I", d, 10)
+        w, h = struct.unpack_from("<ii", d, 18)
+        bpp, = struct.unpack_from("<H", d, 28)
+        bypp = bpp // 8
+        stride = (w * bypp + 3) & ~3
+        flip = h > 0
+        h = abs(h)
+        raw = bytearray()
+        for y in range(h):
+            row = d[off + (h - 1 - y if flip else y) * stride: off + (h - 1 - y if flip else y) * stride + w * bypp]
+            raw.append(0)
+            line = bytearray(w * 3)
+            line[0::3] = row[2::bypp]
+            line[1::3] = row[1::bypp]
+            line[2::3] = row[0::bypp]
+            raw += line
+        def chunk(kind, data):
+            c = struct.pack(">I", len(data)) + kind + data
+            return c + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+        with open(png, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b""))
+
+    def _game_config(self, extra=None):
+        with open(os.path.join(self.work, "wkconfig.json")) as f:
+            cfg = json.load(f)
+        cfg.update({"test": False, "hiddenWindow": True, "musicEnabled": False, "soundEnabled": False, "fogOfWarBrightness": 1.0, "showFps": False})
+        cfg.update(extra or {})
+        return cfg
+
+    def _with_game(self, cfg, timeout):
+        """runs wkbai once with this config in the work folder (its wkconfig.json put back after)"""
+        path = os.path.join(self.work, "wkconfig.json")
+        with open(path) as f:
+            base = json.load(f)
+        with open(path, "w") as f:
+            json.dump(cfg, f, indent=1)
+        log = os.path.join(self.work, "game.log")
+        try:
+            with open(log, "w") as lf:
+                p = subprocess.Popen([self.exe], cwd=self.work, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                     creationflags=0x08000000 if os.name == "nt" else 0)
+                try:
+                    p.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        finally:
+            with open(path, "w") as f:
+                json.dump(base, f, indent=1)
+        return log
+
+    def preview(self, a):
+        m = self._map_arg(a["map"])
+        d = os.path.join(self.work, "preview", self._stem(a["map"]))
+        out = os.path.join(d, "preview.json")
+        os.makedirs(d, exist_ok=True)
+        self.run("preview", m, "--dir", d, "--out", out)
+        with open(out, encoding="utf-8") as f:
+            pv = json.load(f)
+        files = pv.get("files", {})
+        images = []
+        for name in a.get("pictures") or ["relief", "passability", "problems"]:
+            if name in files and os.path.isfile(files[name]) and files[name].endswith(".png"):
+                images.append({"image": base64.b64encode(open(files[name], "rb").read()).decode(), "path": files[name]})
+        shots = a.get("shots")
+        cams = pv.get("cameras", [])
+        if shots:
+            pick = cams
+            if isinstance(shots, list):
+                pick = [c for i, c in enumerate(cams) if i in shots or c.get("label") in shots]
+            cam_list = [c["camera"] for c in pick] + list(a.get("cameras_extra") or [])
+            labels = [c["label"] for c in pick] + ["extra %d" % i for i in range(len(a.get("cameras_extra") or []))]
+            stem = os.path.join(d, "shot")
+            for i in range(len(cam_list)):
+                for ext in (".bmp", ".png"):
+                    if os.path.exists("%s_%d%s" % (stem, i, ext)):
+                        os.remove("%s_%d%s" % (stem, i, ext))
+            hold = 40
+            cfg = self._game_config(a.get("settings"))
+            cfg["benchmark"] = {"saveGame": self._bench_name(a["map"]), "warmupFrames": 150, "frames": 150 + hold * len(cam_list) + 10, "paused": True,
+                                "cameras": cam_list, "cameraHold": hold, "screenshot": (stem + ".bmp").replace("\\", "/"),
+                                "report": os.path.join(d, "bench.json")}
+            self._with_game(cfg, 600)
+            shot_info = []
+            for i, label in enumerate(labels):
+                bmp, png = "%s_%d.bmp" % (stem, i), "%s_%d.png" % (stem, i)
+                if os.path.isfile(bmp):
+                    self._bmp_to_png(bmp, png)
+                    os.remove(bmp)
+                    images.append({"image": base64.b64encode(open(png, "rb").read()).decode(), "path": png})
+                    shot_info.append({"label": label, "camera": cam_list[i], "file": png})
+                else:
+                    shot_info.append({"label": label, "camera": cam_list[i], "file": None})
+            pv["shots"] = shot_info
+        if not images:
+            return pv
+        return {"description": pv, "image": images[0]["image"], "path": images[0]["path"], "images": images}
+
+    def live_open(self, a):
+        from wkbai_agent import Agent
+        if getattr(self, "live", None):
+            self.live_close({})
+        m = self._map_arg(a["map"])
+        port = int(a.get("port", 7791))
+        token = os.path.join(self.user_path, "agent", "token")
+        if os.path.exists(token):
+            os.remove(token)
+        cfg = self._game_config(a.get("settings"))
+        if a.get("show"):
+            cfg["hiddenWindow"] = False
+        cfg["agentControl"] = {"enabled": True, "port": port}
+        bm = {"saveGame": self._bench_name(a["map"]), "warmupFrames": 1000000000, "frames": 1000000000, "paused": True}
+        if a.get("editor"):
+            bm["editorMode"] = "terrain"
+        cfg["benchmark"] = bm
+        path = os.path.join(self.work, "wkconfig.json")
+        with open(path) as f:
+            base = json.load(f)
+        with open(path, "w") as f:
+            json.dump(cfg, f, indent=1)
+        lf = open(os.path.join(self.work, "live.log"), "w")
+        proc = subprocess.Popen([self.exe], cwd=self.work, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                creationflags=0x08000000 if os.name == "nt" else 0)
+        try:
+            deadline = time.time() + 120
+            while not (os.path.exists(token) and os.path.getsize(token) > 0):
+                if proc.poll() is not None or time.time() > deadline:
+                    raise AuthorError({"error": "the game didn't start agent control (live.log in %s)" % self.work})
+                time.sleep(0.3)
+            # (the config can go back once the game has read it)
+            agent = Agent(open(token).read().strip(), port=port, timeout=600)
+        finally:
+            with open(path, "w") as f:
+                json.dump(base, f, indent=1)
+        self.live = {"proc": proc, "agent": agent, "log": lf, "map": m}
+        deadline = time.time() + 600
+        while True:
+            st = agent.request("author.state")
+            if st.get("ok"):
+                break
+            if proc.poll() is not None or time.time() > deadline:
+                raise AuthorError({"error": "the map didn't load", "reply": st})
+            time.sleep(0.5)
+        # the map is there before its models are: wait until the loading screen is gone
+        while True:
+            st = agent.request("author.state")
+            if st.get("loaded"):
+                break
+            if proc.poll() is not None or time.time() > deadline:
+                raise AuthorError({"error": "the game's screen didn't come up (live.log in %s)" % self.work})
+            time.sleep(0.5)
+        return {"opened": m, "port": port, "state": st}
+
+    def _live(self):
+        lv = getattr(self, "live", None)
+        if not lv or lv["proc"].poll() is not None:
+            self.live = None
+            raise AuthorError({"error": "no live game open (live_open first)"})
+        return lv
+
+    def live_op(self, a):
+        lv = self._live()
+        op = a["op"] if a["op"].startswith("author.") else "author." + a["op"]
+        args = dict(a.get("args") or {})
+        args.pop("op", None)
+        r = lv["agent"].request(op, **args)
+        if not r.get("ok"):
+            raise AuthorError(r)
+        return r
+
+    def live_shot(self, a):
+        lv = self._live()
+        ag = lv["agent"]
+        view = {k: a[k] for k in ("at", "from", "distance", "yaw", "above", "camera") if k in a}
+        info = {}
+        if view:
+            info = ag.request("author.view", **view)
+            if not info.get("ok"):
+                raise AuthorError(info)
+            ag.request("wait", frames=3)
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", a.get("name", "live"))[:60] or "live"
+        r = ag.request("screenshot", name=name)
+        if not r.get("ok"):
+            raise AuthorError(r)
+        bmp = r.get("path") or os.path.join(self.user_path, "agent", name + ".bmp")
+        png = os.path.splitext(bmp)[0] + ".png"
+        self._bmp_to_png(bmp, png)
+        return {"description": {"view": info, "file": png}, "image": base64.b64encode(open(png, "rb").read()).decode(), "path": png}
+
+    def live_close(self, a):
+        lv = getattr(self, "live", None)
+        if not lv:
+            return {"closed": False, "why": "no live game"}
+        out = {"closed": True}
+        try:
+            if a.get("save"):
+                out["save"] = lv["agent"].request("author.save", name=a["save"])
+            lv["agent"].request("author.quit")
+        except (OSError, ConnectionError, ValueError):
+            pass
+        try:
+            lv["proc"].wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            lv["proc"].kill()
+        lv["agent"].close()
+        lv["log"].close()
+        self.live = None
+        return out
+
     def call(self, name, a):
         f = {"catalog": self.catalog, "describe_map": self.describe_map, "new_map": self.new_map, "import_map": self.import_map,
              "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile,
@@ -937,7 +1235,9 @@ class Author:
              "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation,
              "set_material_rules": self.set_material_rules, "paint_materials": self.paint_materials, "material_report": self.material_report,
              "set_water": self.set_water, "water_report": self.water_report,
-             "set_bases": self.set_bases, "set_scatter": self.set_scatter, "objects_report": self.objects_report}.get(name)
+             "set_bases": self.set_bases, "set_scatter": self.set_scatter, "objects_report": self.objects_report,
+             "check": self.check, "preview": self.preview, "live_open": self.live_open, "live_op": self.live_op,
+             "live_shot": self.live_shot, "live_close": self.live_close}.get(name)
         if not f:
             raise AuthorError({"error": "unknown tool " + str(name)})
         return f(a)

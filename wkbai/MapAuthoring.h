@@ -33,6 +33,9 @@ namespace MapAuthoring {
 	bool Describe(const std::string& map, const std::string& png, nlohmann::ordered_json& out, std::string& error);
 
 	// "--author catalog ..." / "--author describe ..." (args after the word); the exit code
+	// a map's level to load: a map folder's path (Resolve), a level's game path or a full path; empty
+	// with the error
+	std::string LevelOf(const std::string& map, std::string& error);
 	int RunCatalog(const std::vector<std::string>& args);
 	int RunDescribe(const std::vector<std::string>& args);
 }

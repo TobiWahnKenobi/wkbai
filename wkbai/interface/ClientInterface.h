@@ -201,6 +201,14 @@ private:
 	void editorScripts();
 	// what may keep the level from playing: players without a start camera or without objects
 	std::vector<std::string> editorCheck();
+	// Live map authoring over the agent-control socket (step 17.8, interface/MapEditorAuthor.cpp):
+	// author.heights, paint, water, place, remove, move, check, save, undo, redo, view, state; each
+	// change one undo step of the editor's. Where cheats work (the map editor, single player with
+	// cheat mode, test runs).
+	nlohmann::json authorOp(const nlohmann::json& req);
+	// author.view: a camera held until released ([x, y, z], [pitch, yaw])
+	bool authorViewHeld = false;
+	Vector3 authorViewPosition, authorViewOrientation;
 	void editorWindow();
 	void editorZones();
 	// the Water mode's water design (WaterDesign.h): its panel, and the renderers' water made

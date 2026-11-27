@@ -89,6 +89,10 @@ struct World {
 	std::function<nlohmann::json(const nlohmann::json& request)> harness;
 	// the selection's ids
 	std::function<std::vector<uint32_t>()> selection;
+	// Live map authoring (AgentServer's "author.*" ops, map-authoring.md section 3 and step 17.8):
+	// heights, paint, water, place, remove, move, check, save, undo, redo, view; where cheats
+	// work (the map editor, single player with cheat mode on, test runs), else an error
+	std::function<nlohmann::json(const nlohmann::json& request)> author;
 };
 void SetWorld(const World* world);
 const World* GetWorld();
