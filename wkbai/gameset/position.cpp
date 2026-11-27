@@ -601,6 +601,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		}
 		return false;
 	}
+	std::vector<CommonGameObject::CityRectangle> cityRects; // (eval: gathered for its search)
 	bool canBuildOn(CommonGameState* server, int tx, int tz) {
 		const int bt = objbp->buildingType;
 		const bool walls = bt == Tags::BUILDINGTYPE_WALL || bt == Tags::BUILDINGTYPE_WALL_CORNER_IN || bt == Tags::BUILDINGTYPE_WALL_CORNER_OUT
@@ -614,7 +615,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 				if (!StampdownPlan::tileTerrainAllowed(server, to, px, pz))
 					return false;
 				// no farm in a city, past the walls (the play test: a farmer's farm inside them)
-				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInAnyCity(server, px, pz))
+				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInRectangles(cityRects, px, pz))
 					return false;
 				// not across a gate's way out (a blocking tile of the footprint; StampdownPlan.h)
 				// (walls and gates join there)
@@ -676,6 +677,8 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		const Vector3 asked = po.position;
 		setReach(ctx, po.position);
 		setDoorsteps(ctx);
+		// (the cities' rectangles once for the whole search: canBuildOn's farm-in-a-city test)
+		cityRects = StampdownPlan::allCityRectangles(ctx->gameState);
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
 		const int sx = ox, sz = oz;

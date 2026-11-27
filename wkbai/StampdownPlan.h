@@ -86,6 +86,11 @@ struct StampdownPlan {
 	// playable tile (tx, tz) in any player's city: no farm or village there (the original's
 	// placement check 6, CANNOT_BUILD_HERE; the play test: a farmer's farm inside the walls)
 	static bool tileInAnyCity(CommonGameState* gameState, int tx, int tz);
+	// the same for many tiles: the cities' rectangles gathered once (the AI's site search asked
+	// tileInAnyCity for every tile it tried, each time through every player's children: 12% of a
+	// late six-AI game's step, docs/engine/script-profile.md)
+	static std::vector<CommonGameObject::CityRectangle> allCityRectangles(CommonGameState* gameState);
+	static bool tileInRectangles(const std::vector<CommonGameObject::CityRectangle>& rects, int tx, int tz);
 	// playable tile (tx, tz) within two tiles of a gate's way through (a walkable tile of a
 	// building that also has blocked tiles: a gatehouse in a stockade or wall). The AI's sites
 	// leave it free (gameset/position.cpp): on 3 Isles a Kingmaker laid its Trading Post across

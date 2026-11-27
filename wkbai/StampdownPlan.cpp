@@ -49,19 +49,51 @@ bool StampdownPlan::tileHasBlockingObject(CommonGameState* gameState, int tx, in
 	return false;
 }
 
+bool StampdownPlan::tileInRectangles(const std::vector<CommonGameObject::CityRectangle>& rects, int tx, int tz)
+{
+	for (const auto& rect : rects)
+		if (rect.xStart <= tx && tx <= rect.xEnd && rect.yStart <= tz && tz <= rect.yEnd)
+			return true;
+	return false;
+}
+
+std::vector<CommonGameObject::CityRectangle> StampdownPlan::allCityRectangles(CommonGameState* gameState)
+{
+	std::vector<CommonGameObject::CityRectangle> rects;
+	const CommonGameObject* level = gameState->getLevel();
+	if (!level)
+		return rects;
+	for (const auto& [type, players] : level->children)
+		for (const CommonGameObject* player : players)
+			for (const auto& [ctype, objs] : player->children) {
+				if (ctype.bpClass() != Tags::GAMEOBJCLASS_CITY)
+					continue;
+				for (const CommonGameObject* city : objs)
+					if (city->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+						rects.insert(rects.end(), city->cityRectangles.begin(), city->cityRectangles.end());
+			}
+	return rects;
+}
+
 bool StampdownPlan::tileInAnyCity(CommonGameState* gameState, int tx, int tz)
 {
 	const CommonGameObject* level = gameState->getLevel();
 	if (!level)
 		return false;
+	// (the children are kept by blueprint: only the city blueprints' lists looked through, not
+	// every unit and building of every player for every tile asked; the AI's building placement
+	// asks it for each tile it tries, 12% of a late six-AI game's step, docs/engine/script-profile.md)
 	for (const auto& [type, players] : level->children)
 		for (const CommonGameObject* player : players)
-			for (const auto& [ctype, objs] : player->children)
+			for (const auto& [ctype, objs] : player->children) {
+				if (ctype.bpClass() != Tags::GAMEOBJCLASS_CITY)
+					continue;
 				for (const CommonGameObject* city : objs)
 					if (city->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
 						for (const auto& rect : city->cityRectangles)
 							if (rect.xStart <= tx && tx <= rect.xEnd && rect.yStart <= tz && tz <= rect.yEnd)
 								return true;
+			}
 	return false;
 }
 
@@ -438,6 +470,9 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		};
 		bool tooSteep = false;
 		float lowest = 1e30f, highest = -1e30f;
+		// (the cities' rectangles once for the footprint's tiles)
+		const bool rural = isRural(blueprint);
+		const std::vector<CommonGameObject::CityRectangle> cityRects = rural ? allCityRectangles(gameState) : std::vector<CommonGameObject::CityRectangle>();
 		for (size_t t = 0; t < fp->tiles.size(); t++) {
 			const auto& to = fp->tiles[t];
 			const auto [px, pz] = taken[t];
@@ -457,7 +492,7 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				ok = false;
 			}
 			// no farm or village in a city (WKB.exe's check 6, CANNOT_BUILD_HERE)
-			if (ok && isRural(blueprint) && tileInAnyCity(gameState, px, pz)) {
+			if (ok && rural && tileInRectangles(cityRects, px, pz)) {
 				refuse(Status::InvalidOccupied);
 				ok = false;
 			}
