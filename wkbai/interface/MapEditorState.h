@@ -9,6 +9,7 @@
 #include "../terrain.h"
 #include "../tags.h"
 #include "../WaterDesign.h"
+#include "../Environment.h"
 #include "../gameset/gameset.h"
 #include <map>
 #include <memory>
@@ -53,6 +54,15 @@ struct ClientInterface::EditorState {
 	std::string paintGroup;
 	int paintId = -1, paintTurn = 0;
 	bool paintFlipX = false, paintFlipZ = false, paintRandomTurn = false;
+	// the map's latitude (map.json environment.latitude): the map's own when it has one, else
+	// Britain's; set on the server (the sun and the day's length) and written into map.json on Save
+	float latitude = MapLatitudeBritain;
+	bool latitudeRead = false;
+	// the sun's preview: day and night and the seasons on while the editor shows the latitude's
+	// day (the settings before it put back when it ends); its hour and season
+	bool sunPreview = false, previewDayNight = false, previewSeasons = false;
+	float previewHour = 12.0f;
+	int previewSeason = 1;
 	float radius = 20.0f;   // metres
 	float strength = 20.0f; // height steps (map units) per second at the centre
 	float flattenTo = 0.0f; // the height a flatten stroke keeps (from where it began)

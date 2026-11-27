@@ -1373,6 +1373,8 @@ void ClientInterface::editorWindow()
 			}
 		}
 		ImGui::Separator();
+		editorLatitude();
+		ImGui::Separator();
 		ImGui::InputText("Map name", ed.saveName, sizeof(ed.saveName));
 		if (ImGui::Button("Undo (Ctrl+Z)"))
 			editorUndo();
@@ -2185,6 +2187,137 @@ std::vector<std::string> ClientInterface::editorCheck()
 // into heights.hand.png, painted tiles into tiles.hand.json, the objects into level.txt as
 // hand-made, the water into water.json), compiled again; "editorSaveFormat": "original" saves the
 // original's files instead
+// The map's latitude: a slider (south to north), the sun's path over the day at midsummer, at the
+// equinoxes and at midwinter drawn under it with the horizon, and the day's length and the noon
+// sun's height for each. Set on the server as it moves (the sun of a game with day and night or
+// the seasons follows it at once); "Preview the day" turns them on while the editor is open, with
+// the hour and the season to look at.
+void ClientInterface::editorLatitude()
+{
+	EditorState& ed = *editor;
+	auto setOnServer = [&](const char* name, float value) {
+		withServer([&](Server& server) { server.environment.debugSet(server, name, value); });
+	};
+	if (!ed.latitudeRead) {
+		ed.latitudeRead = true;
+		withServer([&](Server& server) {
+			for (const auto& [name, value] : MapFolder::EnvironmentDefaults(server.mapFile))
+				if (name == "latitude")
+					ed.latitude = value;
+		});
+		setOnServer("latitude", ed.latitude);
+	}
+	if (!ImGui::CollapsingHeader("Sun and latitude"))
+		return;
+	Help::SetWindowPart("Map editor (F8)", "ui/editor/latitude");
+	const bool north = ed.latitude >= 0.0f;
+	char label[48];
+	snprintf(label, sizeof(label), "%.1f\xC2\xB0 %s", std::abs(ed.latitude), north ? "N" : "S");
+	if (ImGui::SliderFloat("Latitude", &ed.latitude, -75.0f, 75.0f, label, ImGuiSliderFlags_AlwaysClamp))
+		setOnServer("latitude", ed.latitude);
+	ImGui::SameLine();
+	if (ImGui::SmallButton("Britain")) {
+		ed.latitude = MapLatitudeBritain;
+		setOnServer("latitude", ed.latitude);
+	}
+	// a few places to start from
+	static const struct { const char* name; float lat; } places[] = {
+		{ "Equator", 0.0f }, { "Sahara", 23.0f }, { "Rome", 41.9f }, { "Central Europe", 47.0f },
+		{ "London", 51.5f }, { "Edinburgh", 56.0f }, { "Oslo", 59.9f }, { "Arctic Circle", 66.6f } };
+	if (ImGui::BeginCombo("##places", "Like...")) {
+		for (const auto& p : places)
+			if (ImGui::Selectable(p.name)) {
+				ed.latitude = p.lat;
+				setOnServer("latitude", ed.latitude);
+			}
+		ImGui::EndCombo();
+	}
+	ImGui::TextWrapped("The sun's path and the length of the day by the season, in games with day and night or the seasons. The further from the equator, the lower the sun and the longer the summer days and winter nights.");
+
+	// the sun's height over a 24-hour day: midsummer, the equinoxes, midwinter
+	const SunDay days[3] = { SunDayAt(ed.latitude, 23.4f), SunDayAt(ed.latitude, 0.0f), SunDayAt(ed.latitude, -23.4f) };
+	const ImU32 colours[3] = { IM_COL32(255, 196, 64, 255), IM_COL32(140, 210, 120, 255), IM_COL32(120, 170, 255, 255) };
+	const char* names[3] = { "Midsummer", "Equinox", "Midwinter" };
+	const float w = std::max(ImGui::GetContentRegionAvail().x, 120.0f), h = 110.0f;
+	const ImVec2 p0 = ImGui::GetCursorScreenPos();
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	auto yOf = [&](float deg) { return p0.y + h * 0.5f - deg / 90.0f * (h * 0.5f - 4.0f); };
+	dl->AddRectFilled(p0, ImVec2(p0.x + w, yOf(0.0f)), IM_COL32(40, 60, 90, 120));
+	dl->AddRectFilled(ImVec2(p0.x, yOf(0.0f)), ImVec2(p0.x + w, p0.y + h), IM_COL32(50, 40, 30, 120));
+	dl->AddLine(ImVec2(p0.x, yOf(0.0f)), ImVec2(p0.x + w, yOf(0.0f)), IM_COL32(200, 200, 200, 160));
+	for (int hr = 6; hr < 24; hr += 6) {
+		const float x = p0.x + w * hr / 24.0f;
+		dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p0.y + h), IM_COL32(200, 200, 200, 50));
+		char t[8];
+		snprintf(t, sizeof(t), "%d", hr);
+		dl->AddText(ImVec2(x + 2, p0.y + h - 14), IM_COL32(200, 200, 200, 140), t);
+	}
+	for (int k = 0; k < 3; k++)
+		for (int i = 0; i < 24; i++)
+			dl->AddLine(ImVec2(p0.x + w * i / 24.0f, yOf(days[k].heightDeg[i])), ImVec2(p0.x + w * (i + 1) / 24.0f, yOf(days[k].heightDeg[i + 1])), colours[k], 2.0f);
+	// the preview's sun on the picture
+	if (ed.sunPreview) {
+		const float decl = ed.previewSeason == 1 ? 23.4f : ed.previewSeason == 3 ? -23.4f : 0.0f;
+		const SunDay d = SunDayAt(ed.latitude, decl);
+		const float f = ed.previewHour / 24.0f * 24.0f;
+		const int i = std::clamp((int)f, 0, 23);
+		const float deg = d.heightDeg[i] + (d.heightDeg[i + 1] - d.heightDeg[i]) * (f - i);
+		dl->AddCircleFilled(ImVec2(p0.x + w * ed.previewHour / 24.0f, yOf(deg)), 5.0f, IM_COL32(255, 255, 200, 255));
+	}
+	ImGui::Dummy(ImVec2(w, h));
+	if (ImGui::BeginTable("##days", 3, ImGuiTableFlags_SizingStretchProp)) {
+		for (int k = 0; k < 3; k++) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colours[k]), "%s", names[k]);
+			ImGui::TableNextColumn();
+			if (days[k].dayHours >= 23.99f)
+				ImGui::TextUnformatted("midnight sun");
+			else if (days[k].dayHours <= 0.01f)
+				ImGui::TextUnformatted("polar night");
+			else
+				ImGui::Text("day %dh %02dm", (int)days[k].dayHours, (int)((days[k].dayHours - (int)days[k].dayHours) * 60.0f));
+			ImGui::TableNextColumn();
+			ImGui::Text("noon sun %.0f\xC2\xB0", std::max(days[k].noonDeg, -90.0f));
+		}
+		ImGui::EndTable();
+	}
+	// the day's length in the game: hours of a 24-hour day, the game's day as long as the lobby sets
+	int dayMin = 20;
+	withServer([&](Server& server) { dayMin = server.environment.settings.dayLengthMin; });
+	ImGui::TextDisabled("A game day of %d minutes: %.1f min of daylight at midsummer, %.1f at midwinter.", dayMin,
+		dayMin * days[0].dayHours / 24.0f, dayMin * days[2].dayHours / 24.0f);
+
+	// the preview: day and night and the seasons on while it lasts, clear weather
+	if (ImGui::Checkbox("Preview the day here", &ed.sunPreview)) {
+		withServer([&](Server& server) {
+			EnvironmentSettings& es = server.environment.settings;
+			if (ed.sunPreview) {
+				ed.previewDayNight = es.dayNight;
+				ed.previewSeasons = es.seasons;
+				server.environment.debugSet(server, "dayNight", 1.0f);
+				server.environment.debugSet(server, "seasons", 1.0f);
+				server.environment.debugSet(server, "weather", 0.0f);
+				server.environment.debugSet(server, "season", ed.previewSeason + 0.5f);
+				server.environment.debugSet(server, "hour", ed.previewHour);
+			}
+			else {
+				server.environment.debugSet(server, "weather", -1.0f);
+				server.environment.debugSet(server, "dayNight", ed.previewDayNight ? 1.0f : 0.0f);
+				server.environment.debugSet(server, "seasons", ed.previewSeasons ? 1.0f : 0.0f);
+			}
+		});
+	}
+	if (ed.sunPreview) {
+		static const char* seasonNames[4] = { "Spring", "Summer (midsummer)", "Autumn", "Winter (midwinter)" };
+		if (ImGui::Combo("Season", &ed.previewSeason, seasonNames, 4))
+			setOnServer("season", ed.previewSeason + 0.5f);
+		if (ImGui::SliderFloat("Hour", &ed.previewHour, 0.0f, 24.0f, "%.1f h"))
+			setOnServer("hour", ed.previewHour);
+		ImGui::TextDisabled("The clock runs on from here; the map is saved without the preview.");
+	}
+}
+
 bool ClientInterface::editorSave(const std::string& name)
 {
 	if (g_settings.value("editorSaveFormat", std::string()) == "original")
@@ -2204,7 +2337,10 @@ bool ClientInterface::editorSave(const std::string& name)
 		// regions edited by hand: under the map's name
 		if (chronicle.regions.ready() && chronicle.regions.edited)
 			chronicle.regions.save(name);
-		const MapFolder::Result r = MapFolder::SaveFromEditor(server, client->terrain, folder);
+		MapFolder::Result r = MapFolder::SaveFromEditor(server, client->terrain, folder);
+		// the map's latitude (the sun's path, the day's length) into its map.json
+		if (r.ok && !MapFolder::SetLatitude(folder, ed.latitude))
+			r.warnings.push_back("the latitude could not be written into map.json");
 		savedOk = r.ok;
 		ed.status = r.ok ? "Saved Maps\\" + name + ".wkbai (in Skirmish)" : "Saving failed: " + r.error;
 		for (const std::string& w : r.warnings)

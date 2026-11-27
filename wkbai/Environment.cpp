@@ -66,6 +66,11 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "weatherCover=%d\n", weatherCover);
 		out += buf;
 	}
+	// (only off 47: the text of a game without a latitude stays as it was)
+	if (latitude != 47.0f) {
+		snprintf(buf, sizeof(buf), "latitude=%.9g\n", latitude);
+		out += buf;
+	}
 	// (only with the wind on: the text of a game without it stays as it was)
 	if (wind != 0) {
 		snprintf(buf, sizeof(buf), "wind=%d\nwindFrom=%d\nwindStrength=%d\nwindVeers=%d\nwindEffects=%d\nwindSeed=%d\n",
@@ -145,6 +150,7 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "moonPhase") moonPhase = std::clamp(i, 0, 8);
 	else if (name == "moonStart") moonStart = v < 0.0f ? -1.0f : Frac(v);
 	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
+	else if (name == "latitude") latitude = std::clamp(v, -75.0f, 75.0f);
 	else if (name == "peasantsSleep") peasantsSleep = i != 0;
 	else if (name == "farmersWinter") farmersWinter = i != 0;
 	else if (name == "riverCurrents") riverCurrents = i != 0;
@@ -474,15 +480,34 @@ std::vector<FloodLand> FindFloodLand(const Terrain* t)
 	return out;
 }
 
-SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge)
+SunDay SunDayAt(float latitudeDeg, float declinationDeg)
+{
+	SunDay d;
+	const float lat = std::clamp(latitudeDeg, -75.0f, 75.0f) * PI / 180.0f;
+	// (south of the equator the game's summer is the south's: the declination turned with it)
+	const float decl = (latitudeDeg < 0.0f ? -declinationDeg : declinationDeg) * PI / 180.0f;
+	const float h0 = std::acos(std::clamp(-std::tan(lat) * std::tan(decl), -1.0f, 1.0f));
+	d.dayHours = h0 * 24.0f / PI;
+	d.noonDeg = 90.0f - std::abs(latitudeDeg - (latitudeDeg < 0.0f ? -declinationDeg : declinationDeg));
+	for (int i = 0; i <= 24; i++) {
+		const float h = (i / 24.0f - 0.5f) * 2.0f * PI;
+		d.heightDeg[i] = std::asin(std::clamp(std::sin(lat) * std::sin(decl) + std::cos(lat) * std::cos(decl) * std::cos(h), -1.0f, 1.0f)) * 180.0f / PI;
+	}
+	return d;
+}
+
+SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge, float latitudeDeg)
 {
 	SunState sun;
-	// at 47 degrees north; the sun's declination over the year: the equinoxes in the middle of
-	// spring and autumn, the solstices in the middle of summer and winter (with the seasons'
-	// temperatures), so the noon sun stands 66 degrees high at midsummer and 20 at midwinter and
-	// the days last 15.7 and 8.3 hours of the day's length; a mild 10 degrees without seasons
-	const float lat = 47.0f * PI / 180.0f;
-	const float decl = (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f)) : 10.0f) * PI / 180.0f;
+	// at the map's latitude (47 degrees north where it sets none); the sun's declination over the
+	// year: the equinoxes in the middle of spring and autumn, the solstices in the middle of summer
+	// and winter (with the seasons' temperatures). At 47 north the noon sun stands 66 degrees high
+	// at midsummer and 20 at midwinter and the days last 15.7 and 8.3 hours of the day's length; a
+	// mild 10 degrees without seasons. South of the equator the declination turns with the
+	// latitude: the game's summer stays the long days, its noon sun in the north.
+	const float lat = std::clamp(latitudeDeg, -75.0f, 75.0f) * PI / 180.0f;
+	const float hemi = latitudeDeg < 0.0f ? -1.0f : 1.0f;
+	const float decl = hemi * (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f)) : 10.0f) * PI / 180.0f;
 	const float h = (dayFraction - 0.5f) * 2.0f * PI;
 	// the moon: its elongation, how far east of the sun it has moved along the ecliptic (0 new,
 	// half a turn full), so it rises and sets that much later; its declination the sun's at that
@@ -491,7 +516,7 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	const float elong = 2.0f * PI * moonAge;
 	// (without the seasons the sun's fixed 10 degrees as a point of the ecliptic: the full moon
 	// opposite it at -10, the whole disc lit)
-	const float moonDecl = (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f) + elong) : 10.0f * std::cos(elong)) * PI / 180.0f;
+	const float moonDecl = hemi * (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f) + elong) : 10.0f * std::cos(elong)) * PI / 180.0f;
 	const float hm = h - elong;
 	// in a frame of east, south, up
 	auto atDecl = [&](float hourAngle, float decl) {

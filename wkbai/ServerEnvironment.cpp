@@ -1810,7 +1810,7 @@ void ServerEnvironment::update(Server& server)
 	// weather's pull, eased towards (the day's mean); then the day's swing on it, straight from
 	// the clock (DiurnalShape: coldest just before sunrise, warmest at 14:30), not eased: the
 	// easing (up to 90 s) had damped and delayed it, with short days to almost nothing
-	const SunState sun = ComputeSun(state.dayFraction, state.yearFraction, settings.seasons, state.cloudCover);
+	const SunState sun = ComputeSun(state.dayFraction, state.yearFraction, settings.seasons, state.cloudCover, 0.5f, settings.latitude);
 	{
 		static const float means[4] = { 12.0f, 24.0f, 11.0f, -3.0f };
 		const float x = state.yearFraction * 4.0f - 0.5f;
@@ -1974,6 +1974,7 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	// the moon's phase (every client draws the same one)
 	msg.writeUint8((uint8_t)settings.moonPhase);
 	msg.writeFloat(settings.moonStart);
+	msg.writeFloat(settings.latitude);
 	// the lobby's Clear Fog Of War (on: the clients show everything, no fog of war)
 	msg.writeUint8(Server::clearFogOfWar ? 1 : 0);
 	msg.writeUint8(settings.weatherCover < 0 ? 255 : (uint8_t)settings.weatherCover);
@@ -2169,7 +2170,7 @@ void ServerEnvironment::debugSet(Server& server, const std::string& name, float 
 	if (name == "sunrise" || name == "sunset") {
 		// hours after this season's sunrise or sunset (before it when negative): test runs reach
 		// dawn and dusk on any day of the year, where a fixed hour can land in the night
-		const SunState sun = ComputeSun(EnvDayFraction(settings, now), EnvYearFraction(settings, now), settings.seasons, state.cloudCover);
+		const SunState sun = ComputeSun(EnvDayFraction(settings, now), EnvYearFraction(settings, now), settings.seasons, state.cloudCover, 0.5f, settings.latitude);
 		const float h = (name == "sunrise" ? sun.sunrise : sun.sunset) + value;
 		printf("ENVIRONMENT debug t=%.0f: %s %+g h (sunrise %.2f, sunset %.2f)\n", now, name.c_str(), value, sun.sunrise, sun.sunset);
 		debugSet(server, "hour", h - 24.0f * std::floor(h / 24.0f));

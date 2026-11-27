@@ -2855,6 +2855,9 @@ std::vector<std::pair<std::string, float>> EnvironmentDefaults(const std::string
 				"waning gibbous", "third quarter", "waning crescent" }, moon))
 				out.emplace_back("moonPhase", (float)moon);
 		}
+		// the latitude (degrees north, negative south): the sun's path and the day's length
+		if (e.contains("latitude") && e["latitude"].is_number())
+			out.emplace_back("latitude", e["latitude"].get<float>());
 		if (const json s = e.value("seasons", json::object()); s.is_object()) {
 			if (s.contains("on"))
 				out.emplace_back("seasons", s["on"].get<bool>() ? 1.0f : 0.0f);
@@ -2914,6 +2917,23 @@ std::vector<std::pair<std::string, float>> EnvironmentDefaults(const std::string
 	return out;
 }
 
+bool SetLatitude(const fs::path& folder, float latitudeDeg)
+{
+	std::string text;
+	if (!ReadAll(folder / "map.json", text))
+		return false;
+	json j = json::parse(text, nullptr, false);
+	if (j.is_discarded() || !j.is_object())
+		return false;
+	if (!j.contains("environment") || !j["environment"].is_object())
+		j["environment"] = json::object();
+	// (to a tenth of a degree: the editor's slider)
+	j["environment"]["latitude"] = std::round(std::clamp(latitudeDeg, -75.0f, 75.0f) * 10.0f) / 10.0f;
+	std::ofstream f(folder / "map.json", std::ios::binary);
+	f << j.dump(1) << "\n";
+	return (bool)f;
+}
+
 int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& settings)
 {
 	// a setting's value by its apply name (the ones EnvironmentDefaults gives)
@@ -2933,6 +2953,7 @@ int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& se
 		if (n == "weatherMinChange") return (float)s.weatherMinChange;
 		if (n == "weatherMaxChange") return (float)s.weatherMaxChange;
 		if (n == "weatherTypes") return (float)s.weatherTypes;
+		if (n == "latitude") return s.latitude;
 		return -12345.0f;
 	};
 	const EnvironmentSettings lobbyDefault;

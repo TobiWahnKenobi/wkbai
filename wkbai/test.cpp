@@ -16095,6 +16095,73 @@ void Test_CartDriver()
 	printf("CARTDRIVER %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+// The map's latitude: the sun's path and the day's length (ComputeSun, SunDayAt), the setting
+// through its save text and the network's apply, and map.json's environment.latitude read and
+// written (MapFolder::EnvironmentDefaults, SetLatitude)
+void Test_Latitude()
+{
+	int bad = 0;
+	auto check = [&](const char* what, bool ok, const char* fmt, auto... a) {
+		char buf[256];
+		snprintf(buf, sizeof(buf), fmt, a...);
+		printf("LATITUDE %s %d %s\n", what, ok ? 1 : 0, buf);
+		bad += !ok;
+	};
+	// 47 north as before (the default): 15.7 h at midsummer, 8.3 at midwinter
+	const SunDay c47s = SunDayAt(47.0f, 23.4f), c47w = SunDayAt(47.0f, -23.4f);
+	check("47 north as before", std::abs(c47s.dayHours - 15.7f) < 0.15f && std::abs(c47w.dayHours - 8.3f) < 0.15f, "summer %.2f h, winter %.2f h", c47s.dayHours, c47w.dayHours);
+	// ComputeSun's default is that latitude
+	const SunState d = ComputeSun(0.5f, 0.375f, true, 0.0f), d47 = ComputeSun(0.5f, 0.375f, true, 0.0f, 0.5f, 47.0f);
+	check("default unchanged", d.sunTrue.y == d47.sunTrue.y && d.sunrise == d47.sunrise, "noon height %.4f %.4f", d.sunTrue.y, d47.sunTrue.y);
+	// Britain: longer summer days, a lower noon sun than at 47
+	const SunDay b = SunDayAt(MapLatitudeBritain, 23.4f), bw = SunDayAt(MapLatitudeBritain, -23.4f);
+	check("Britain", b.dayHours > c47s.dayHours + 0.5f && bw.dayHours < c47w.dayHours - 0.5f && b.noonDeg < c47s.noonDeg, "summer %.2f h, winter %.2f h, noon %.1f deg", b.dayHours, bw.dayHours, b.noonDeg);
+	// ComputeSun agrees with SunDayAt: midsummer's sunrise and sunset at 53
+	const SunState m53 = ComputeSun(0.5f, 0.375f, true, 0.0f, 0.5f, 53.0f);
+	check("ComputeSun at 53", std::abs((m53.sunset - m53.sunrise) - b.dayHours) < 0.05f, "%.2f h against %.2f", m53.sunset - m53.sunrise, b.dayHours);
+	// the equator: 12 hours all year, the sun overhead at the equinox
+	const SunDay e = SunDayAt(0.0f, 0.0f), es = SunDayAt(0.0f, 23.4f);
+	check("equator", std::abs(e.dayHours - 12.0f) < 0.01f && std::abs(es.dayHours - 12.0f) < 0.01f && e.noonDeg > 89.9f, "%.2f h, %.2f h, noon %.1f", e.dayHours, es.dayHours, e.noonDeg);
+	// beyond the Arctic Circle: midnight sun and polar night
+	check("arctic", SunDayAt(70.0f, 23.4f).dayHours > 23.99f && SunDayAt(70.0f, -23.4f).dayHours < 0.01f, "%.2f h, %.2f h", SunDayAt(70.0f, 23.4f).dayHours, SunDayAt(70.0f, -23.4f).dayHours);
+	// the south: the game's summer still the long days, the noon sun in the north (ComputeSun's
+	// frame: east, up, south; south < 0 is north)
+	const SunState s = ComputeSun(0.5f, 0.375f, true, 0.0f, 0.5f, -35.0f);
+	check("south", s.sunset - s.sunrise > 13.5f && s.sunTrue.z < 0.0f, "summer %.2f h, noon south component %.3f", s.sunset - s.sunrise, s.sunTrue.z);
+	// the setting: applied, clamped, in the save text only when moved
+	EnvironmentSettings es1;
+	const bool absent = es1.text().find("latitude") == std::string::npos;
+	es1.apply("latitude", 53.0f);
+	EnvironmentSettings es2;
+	std::istringstream lines(es1.text());
+	for (std::string line; std::getline(lines, line);)
+		if (const size_t eq = line.find('='); eq != std::string::npos)
+			es2.apply(line.substr(0, eq), (float)atof(line.c_str() + eq + 1));
+	es1.apply("latitude", 120.0f);
+	check("setting", absent && es2.latitude == 53.0f && es1.latitude == 75.0f, "absent %d, read back %.1f, clamped %.1f", (int)absent, es2.latitude, es1.latitude);
+	// map.json: written and read back, the rest of map.json kept
+	const std::filesystem::path folder = g_userPath / "saved" / "Maps" / "Latitude Test.wkbai";
+	std::error_code ec;
+	std::filesystem::remove_all(folder, ec);
+	std::filesystem::create_directories(folder, ec);
+	{
+		std::ofstream f(folder / "map.json", std::ios::binary);
+		f << "{\"format\": \"wkbai map\", \"version\": 1, \"name\": \"Latitude Test\", \"environment\": {\"dayNight\": {\"on\": true}}}\n";
+	}
+	const bool wrote = MapFolder::SetLatitude(folder, 56.04f);
+	float read = -999.0f;
+	bool dayNightKept = false;
+	for (const auto& [name, value] : MapFolder::EnvironmentDefaults("Maps\\Latitude Test.wkbai")) {
+		if (name == "latitude") read = value;
+		if (name == "dayNight") dayNightKept = value == 1.0f;
+	}
+	EnvironmentSettings lobby;
+	const int applied = MapFolder::ApplyEnvironmentDefaults("Maps\\Latitude Test.wkbai", lobby);
+	check("map.json", wrote && std::abs(read - 56.0f) < 0.01f && dayNightKept && lobby.latitude == read && applied == 2, "wrote %d, read %.2f, dayNight kept %d, applied %d (latitude %.1f)", (int)wrote, read, (int)dayNightKept, applied, lobby.latitude);
+	std::filesystem::remove_all(folder, ec);
+	printf("LATITUDE all %d\n", bad == 0 ? 1 : 0);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -16221,6 +16288,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_CartDriver, "Cart driver (Mechanics\\Cart Death.cpp): a cart beaten below a quarter of its hit points loses its rider, a riderless cart for the map's nameless player (1026) keeps its load, and another player's peasant takes it over (Take Cart): that player's cart at full hit points, the peasant its driver"},
 {Test_MapObjects, "Map objects: four bases (two starts chosen) laid out by intent, every building by the server's placement rules, fair gold, stone and wood near each, forests by habitat (patches, a tree budget), the checks in the report and describe_map, a refused hand building reported, the same twice, a house fits by each Manor in the game, played"},
 {Test_MapChecks, "Map checks: a deliberately broken map (an unreachable start, land no unit reaches with gold on it, a house over a cliff, a puddle, a seam, unfair gold, a player with no base) with every fault reported by one check pass with its place and a fix; the same map without the faults clean; a paint mends the seam; previews and cameras above ground; 4 Peaks checked"},
+{Test_Latitude, "Latitude: the sun's path and the day's length by the map's latitude (47 north as before, Britain, the equator, the Arctic, the south), the setting saved and clamped, map.json's environment.latitude written and read"},
 };
 
 void LaunchTest()

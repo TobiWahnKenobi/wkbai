@@ -264,9 +264,9 @@ namespace {
 					climates.push_back(f.substr(0, f.size() - 5));
 		e["climates"] = climates;
 		// what the game applies today (step 17.2); the rest is kept for step 17.13
-		e["applied"] = { "dayNight.on", "dayNight.dayLengthMin", "dayNight.start (an hour)", "dayNight.moonPhase", "seasons.on",
+		e["applied"] = { "latitude", "dayNight.on", "dayNight.dayLengthMin", "dayNight.start (an hour)", "dayNight.moonPhase", "seasons.on",
 			"seasons.seasonLengthMin", "seasons.start", "seasons.severity", "weather.stability", "weather.allowed" };
-		e["keptForLater"] = { "climate", "latitude", "dayNight.start (by the sun)", "seasons.meanC", "seasons.dailySwingC", "weather.weights",
+		e["keptForLater"] = { "climate", "dayNight.start (by the sun)", "seasons.meanC", "seasons.dailySwingC", "weather.weights",
 			"weather.start", "wind", "height", "areas", "fixed" };
 		return e;
 	}
