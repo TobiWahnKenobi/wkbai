@@ -31,6 +31,7 @@
 #include <vector>
 #include <algorithm>
 #include "util/SimRandom.h"
+#include <sstream>
 
 namespace {
 	struct SaveWriter {
@@ -95,7 +96,7 @@ namespace {
 	}
 
 	// The side files of an original-format save, or of an older wkbai save
-	const char* const SIDE_FILES[10] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt", ".trees.txt", ".naval.txt" };
+	const char* const SIDE_FILES[11] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt", ".trees.txt", ".naval.txt", ".associators.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -525,7 +526,7 @@ bool Server::saveGame(const char* filename)
 	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
 	//   id> <target> <path> <point> <tried>" each;
 	// - the unit history (UnitHistory).
-	std::string settings, environmentText, paths, history, movements, government, discovered, intensity, trees, naval;
+	std::string settings, environmentText, paths, history, movements, government, discovered, intensity, trees, naval, associators;
 	if (!savingLevel) {
 		movements = movementSaveText();
 		// the players' memory of the trees under the fog of war (FogOfWar)
@@ -535,6 +536,7 @@ bool Server::saveGame(const char* filename)
 		government = ministries.saveText();
 		// the AIs' navies: ferries, colonies, route cogs (Naval::SaveText)
 		naval = Naval::SaveText();
+		associators = associatorsSaveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
 		if (environment.enabled() || environment.windOn() || es.skyWeather != 0 || es.skyCover != 45)
@@ -564,8 +566,8 @@ bool Server::saveGame(const char* filename)
 		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt, .ministries.txt,
 		// .discovered.txt and .intensity.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
-		const std::string* sides[10] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees, &naval };
-		for (int i = 0; i < 10; i++) {
+		const std::string* sides[11] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees, &naval, &associators };
+		for (int i = 0; i < 11; i++) {
 			if (!sides[i]->empty())
 				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
 			else
@@ -600,6 +602,7 @@ bool Server::saveGame(const char* filename)
 	file.add("intensity", 1, std::move(intensity));
 	file.add("treeMemory", 1, std::move(trees));
 	file.add("naval", 1, std::move(naval));
+	file.add("associators", 1, std::move(associators));
 	const bool ok = writeFile(path, file.write(), false);
 	// an older save's side files of the same name would be stale: everything is in the file now
 	if (ok)
@@ -619,8 +622,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	if (!SaveFile::IsSaveFile(all)) {
 		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
 		parts.world = std::move(all);
-		std::string* sides[10] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity, &parts.treeMemory, &parts.naval };
-		for (int i = 0; i < 10; i++)
+		std::string* sides[11] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity, &parts.treeMemory, &parts.naval, &parts.associators };
+		for (int i = 0; i < 11; i++)
 			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
 		return parts;
 	}
@@ -637,7 +640,7 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	const Known known[] = { { "authoring", &authoring }, { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
 		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity },
-		{ "treeMemory", &parts.treeMemory }, { "naval", &parts.naval } };
+		{ "treeMemory", &parts.treeMemory }, { "naval", &parts.naval }, { "associators", &parts.associators } };
 	for (const SaveSection& s : file.sections) {
 		const Known* k = nullptr;
 		for (const Known& candidate : known)
@@ -654,6 +657,67 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 		*k->text += s.text;
 	}
 	return parts;
+}
+
+// The associators' order (the associators section, ServerGameObject::associatorSeq): a line per
+// object and category with more than one associator, "<object> <count> <ids in registration
+// order> <category>", objects and categories ascending. Applied after the world's ASSOCIATE lines,
+// which register them in the objects' order instead.
+std::string Server::associatorsSaveText() const
+{
+	std::string text;
+	for (const auto& [id, cobj] : idmap) {
+		const ServerGameObject* obj = (const ServerGameObject*)cobj;
+		if (obj->deleted)
+			continue;
+		for (const auto& [category, set] : obj->associators) {
+			if (set.size() < 2)
+				continue;
+			std::vector<std::pair<uint64_t, uint32_t>> order;
+			for (const SrvGORef& ref : set) {
+				auto it = obj->associatorSeq.find({ category, ref.objid });
+				order.emplace_back(it != obj->associatorSeq.end() ? it->second : 0, ref.objid);
+			}
+			std::stable_sort(order.begin(), order.end());
+			text += std::to_string(obj->id) + " " + std::to_string(order.size());
+			for (const auto& o : order)
+				text += " " + std::to_string(o.second);
+			text += " " + gameSet->associations.names.getString(category) + "\n";
+		}
+	}
+	return text;
+}
+
+void Server::associatorsLoadText(const std::string& text)
+{
+	size_t at = 0;
+	while (at < text.size()) {
+		size_t end = text.find('\n', at);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = text.substr(at, end - at);
+		at = end + 1;
+		std::istringstream in(line);
+		uint32_t objId = 0;
+		size_t count = 0;
+		if (!(in >> objId >> count) || count > 100000)
+			continue;
+		std::vector<uint32_t> ids(count);
+		for (uint32_t& i : ids)
+			in >> i;
+		std::string name;
+		std::getline(in >> std::ws, name);
+		ServerGameObject* obj = findObject(objId);
+		const int category = gameSet->associations.names.getIndex(name);
+		if (!obj || category < 0)
+			continue;
+		auto it = obj->associators.find(category);
+		if (it == obj->associators.end())
+			continue;
+		for (uint32_t i : ids)
+			if (it->second.count(SrvGORef(i)))
+				obj->associatorSeq[{ category, i }] = ++associationSeq;
+	}
 }
 
 // The players' memory of the trees (the treeMemory section): "player <id>" and that player's

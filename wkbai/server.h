@@ -49,6 +49,13 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	std::unordered_set<const Reaction*> individualReactions;
 	// ordered by object id (see CommonGameState::aliases)
 	std::map<int, std::set<SrvGORef>> associates, associators;
+	// when each associator registered this object ((category, associator id) -> Server::
+	// associationSeq): WKB.exe keeps an object's associators in registration order and its
+	// FINDER_ASSOCIATORS lists them so (Object_Finder_Associators, 0x446d40, walks a vector),
+	// which ITEM_VALUE's first object depends on (0x465870: a guarding army's "My Attack Range"
+	// FINDER_ASSOCIATORS "My Guarding Target": the army registered before its units). Saved in
+	// the "associators" section, so a loaded game walks them as the live one did.
+	std::map<std::pair<int, uint32_t>, uint64_t> associatorSeq;
 	std::vector<SrvGORef> referencers;
 	std::vector<uint32_t> seenObjects; // ids of the objects in sight range, sorted
 	// a fingerprint of seenObjects (two sums of mixed ids): the same objects in range again are
@@ -245,7 +252,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory, naval;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory, naval, associators;
 	};
 	// The players' memory of the trees under the fog of war (FogOfWar's tree memory, the
 	// treeMemory section): kept by each player's client on this machine, by player id, its text
@@ -387,6 +394,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::map<uint32_t, float> buildingHpDestroyed;
 	// (shooting player, target's player) -> missiles buildings fired (ServerGameObject::associateObject)
 	std::map<std::pair<uint32_t, uint32_t>, int> buildingShots;
+	// the registrations' counter (ServerGameObject::associatorSeq) and its save section
+	uint64_t associationSeq = 0;
+	std::string associatorsSaveText() const;
+	void associatorsLoadText(const std::string& text);
 	std::map<std::string, float> userProfileItems;
 	// wkbai's day and night, seasons and weather (the skirmish settings "dayNight", "seasons", ...): off
 	ServerEnvironment environment;
