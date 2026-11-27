@@ -273,3 +273,18 @@ void RestoreAttachmentPath(Task* task, uint32_t targetId, int pathNo, size_t ste
 // walking there (a rally point's units gather around it)
 Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place);
 Vector3 SpawnSpot(const ServerGameObject* building); // where a building puts the unit it has trained (its CR_ path)
+
+// ArmyCannotReach (an AI army's victims) for many targets of one army: its members' kinds found
+// once (gameset/actions.cpp REGISTER_ASSOCIATES walked the army's tree again for every target:
+// 6.1% of a 9000-unit battle step, docs/engine/script-profile.md). The same answers while the
+// army's members stay as they were.
+struct ServerGameObject;
+bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target);
+struct ArmyReach {
+	explicit ArmyReach(ServerGameObject* army);
+	bool cannotReach(ServerGameObject* target) const;
+private:
+	ServerGameObject* army;
+	bool improved = false;
+	std::map<int, ServerGameObject*> kinds;
+};

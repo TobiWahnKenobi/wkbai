@@ -13,6 +13,7 @@
 #include "../network.h"
 #include "ScriptContext.h"
 #include "../BreakpointManager.h"
+#include "../Order.h"
 #include "../settings.h"
 
 #include <cassert>
@@ -550,8 +551,15 @@ struct ActionRegisterAssociates : Action {
 		auto aors = f_aors->eval(ctx);
 		auto ated = f_ated->eval(ctx);
 		for (ServerGameObject *aor : aors) {
+			if (!reachableOnly) {
+				for (ServerGameObject* obj : ated)
+					aor->associateObject(category, obj);
+				continue;
+			}
+			// (the army's members found once for all the targets: associating changes no member)
+			const ArmyReach reach(aor);
 			for (ServerGameObject *obj : ated)
-				if (!reachableOnly || (!ArmyCannotReach(aor, obj) && !RecentlyGaveUp(aor, obj)))
+				if (!reach.cannotReach(obj) && !RecentlyGaveUp(aor, obj))
 					aor->associateObject(category, obj);
 		}
 	}

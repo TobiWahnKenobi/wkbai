@@ -1161,8 +1161,9 @@ bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
 static void MemberKinds(ServerGameObject* obj, bool throughArmies, std::map<int, ServerGameObject*>& kinds, int depth = 0)
 {
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		// (try_emplace: emplace made a node, on the heap, for every member of a kind already found)
 		if (!obj->deleted)
-			kinds.emplace(MovementController::movementClass(obj->blueprint) * 2 + (IsRangedUnit(obj) ? 1 : 0), obj);
+			kinds.try_emplace(MovementController::movementClass(obj->blueprint) * 2 + (IsRangedUnit(obj) ? 1 : 0), obj);
 		return;
 	}
 	if (depth > 4 || !(obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || (throughArmies && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)))
@@ -1213,6 +1214,28 @@ bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 	return true;
 }
 
+ArmyReach::ArmyReach(ServerGameObject* army) : army(army)
+{
+	improved = army && ImprovedFormations();
+	if (improved)
+		MemberKinds(army, true, kinds);
+}
+
+bool ArmyReach::cannotReach(ServerGameObject* target) const
+{
+	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
+		return false;
+	if (!improved)
+		return ArmyCannotReach(army, target);
+	// (KindsOutOfReach with the kinds found once)
+	if (kinds.empty())
+		return false;
+	for (const auto& [kind, rep] : kinds)
+		if (!OutOfReach(rep, target->position, IsRangedUnit(rep) ? 30.0f : 3.0f))
+			return false;
+	return true;
+}
+
 // (gameset/actions.cpp, an AI army's victims) whether an army's soldiers can never get within
 // reach of the target: its first character, through its formations and the armies under it (an
 // archer's 30 m, else 3 m). A target that isn't a character or formation (a building: walls and
@@ -1221,8 +1244,10 @@ bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
 {
 	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
 		return false;
-	if (ImprovedFormations())
-		return KindsOutOfReach(army, target->position, true);
+	if (ImprovedFormations()) {
+		ArmyReach reach(army);
+		return reach.cannotReach(target);
+	}
 	std::function<ServerGameObject*(ServerGameObject*, int)> first = [&](ServerGameObject* o, int depth) -> ServerGameObject* {
 		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 			return o->deleted ? nullptr : o;
