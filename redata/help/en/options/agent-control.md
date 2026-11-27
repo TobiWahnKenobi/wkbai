@@ -26,6 +26,10 @@ The label reads "Its port (127.0.0.1 only)": the network port the program connec
 
 The label reads "Human limit: actions per minute (empty: none)": at most this many actions a minute (up to 2,000), so the program can't play faster than a person could. An action is a mouse button or a key (other than Ctrl, Shift and Alt) going down. Empty: no limit.
 
+## Changing a map
+
+Where cheats work (the map editor, single player with cheat mode on, test runs), a program can also change the map through agent control: raise, lower, flatten and smooth the ground or lay a ramp, paint the ground, add and remove lakes, place, remove and move objects, check the map, move the camera, undo, redo and save. Each change is one undo step of the [map editor](../ui/editor/index.md#undo-and-redo)'s, so Ctrl+Z takes it back too. In a normal game none of this works.
+
 ## Human limit: reaction delay
 
 The label reads "Human limit: reaction delay in ms (empty: none)": each thing the program asks for starts only this many milliseconds later (up to 5,000), as a person needs time to react. Empty: no delay.
