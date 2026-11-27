@@ -42,7 +42,7 @@ The skirmish lobby and the Map Editor list each folder once. A folder named "2 P
 
 ## The map's own day and weather
 
-A map's `map.json` may carry an `environment` block: whether the map has day and night and how long a day is, the hour and moon it starts with, whether it has seasons, how long they are, which comes first and how harsh they are, and how often the weather changes and which weathers may come. A new game on the map from the lobby starts with these in place of the [Seasons & Weather tab](../frontend/skirmish/weather.md)'s settings that were left at their defaults. A setting changed in the lobby stays as it was set there.
+A map's `map.json` may carry an `environment` block: whether the map has day and night and how long a day is, the hour and moon it starts with, whether it has seasons, how long they are, which comes first and how harsh they are, and how often the weather changes and which weathers may come, and the map's `latitude` (degrees, -75 to 75, negative is south; 47 if missing), which sets the sun's path and the day's length ([Sun and latitude](latitude.md)). A new game on the map from the lobby starts with these in place of the [Seasons & Weather tab](../frontend/skirmish/weather.md)'s settings that were left at their defaults. A setting changed in the lobby stays as it was set there.
 
 ## The land from a plan
 
@@ -131,6 +131,8 @@ The materials are data: `Maps\Materials\All_Textures.json` for the game's textur
 ## The build folder
 
 Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. In the skirmish lobby this happens in the background, under a "Preparing the map" window with a progress bar ([the map list](../frontend/skirmish/settings.md#the-map-list)). You can delete `build\` at any time, or leave it out when you share the map.
+
+The build numbers the players as the original maps do (the Neutral Player 1026, the players from 1027), so the game's rules that name a player work on maps made in wkbai too: for example a cart that has lost its driver, the AI's diplomacy and the buildings along paths. Map folders built by an older wkbai are built again once, the first time they are loaded.
 
 ## Importing an original map
 
